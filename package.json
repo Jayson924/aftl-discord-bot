@@ -1,0 +1,16 @@
+{
+  "name": "aftl-discord-bot",
+  "version": "1.0.0",
+  "description": "AFTL guild raid planner companion bot",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "deploy-commands": "node src/deploy-commands.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.102.1",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7"
+  }
+}
