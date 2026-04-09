@@ -240,7 +240,7 @@ Rules:
 
     if (allMentions.size > 0) {
       const pingStr = [...allMentions].map(id => `<@${id}>`).join('\n');
-      await thread.send(`${pingStr}\nLoot thread`);
+      await thread.send(`${pingStr}`);
     }
   },
 };

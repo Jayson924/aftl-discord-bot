@@ -110,7 +110,7 @@ module.exports = {
     // Ping players in the thread
     if (allMentions.size > 0) {
       const pingStr = [...allMentions].map(id => `<@${id}>`).join('\n');
-      await thread.send(`${pingStr} Let's go!`);
+      await thread.send(`${pingStr}`);
     }
 
     await interaction.editReply({ content: `Thread created: ${thread}` });
