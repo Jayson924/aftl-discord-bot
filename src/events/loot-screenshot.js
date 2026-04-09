@@ -158,7 +158,7 @@ async function processScreenshot(message, attachment, raidType, lineupName) {
     if (savedLineup) {
       const lineupPlayers = extractedNames.map((name, i) => ({
         lineup_id: savedLineup.id,
-        player_name: name,
+        player_name: playerMap[name] ? name : `[PUB] ${name}`,
         player_id: playerMap[name] || null,
         slot_position: i + 1,
       }));
@@ -180,7 +180,7 @@ async function processScreenshot(message, attachment, raidType, lineupName) {
           allMentions.add(discordId);
           return `\`${i + 1}.\` <@${discordId}>`;
         }
-        return `\`${i + 1}.\` ${name}`;
+        return `\`${i + 1}.\` [PUB] ${name}`;
       })
       .join('\n');
 
