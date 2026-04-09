@@ -2,22 +2,14 @@ const { Events, EmbedBuilder } = require('discord.js');
 const supabase = require('../supabase');
 
 function parseMessage(text) {
-  const lower = text.toLowerCase();
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
 
-  // Detect raid type
   let raidType = null;
   if (lower.includes('hardcore') || lower.includes('hc')) raidType = 'Hardcore';
   else if (lower.includes('classic')) raidType = 'Classic';
 
-  // Try to extract a date from the message, otherwise use today
-  const dateMatch = text.match(
-    /(\w{3,9}\s+\d{1,2})|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/
-  );
-  const dateStr = dateMatch
-    ? dateMatch[0]
-    : new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
-  return { raidType, dateStr };
+  return { raidType, lineupName: trimmed || null };
 }
 
 async function analyzeScreenshot(buffer, mimeType, knownNames) {
@@ -100,165 +92,180 @@ function detectMimeType(buffer, fallback) {
   return fallback;
 }
 
+async function processScreenshot(message, attachment, raidType, lineupName) {
+  await message.react('⏳');
+
+  try {
+    const response = await fetch(attachment.url);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const mimeType = detectMimeType(buffer, attachment.contentType);
+
+    const { data: knownPlayers } = await supabase
+      .from('players')
+      .select('name');
+    const knownNames = (knownPlayers || []).map((p) => p.name);
+
+    const parsed = await analyzeScreenshot(buffer, mimeType, knownNames);
+    const extractedNames = (parsed.players || [])
+      .map((p) => p.name)
+      .filter(Boolean);
+
+    if (extractedNames.length === 0) {
+      await message.reactions.removeAll();
+      await message.reply('No player names found in the screenshot.');
+      return;
+    }
+
+    const { data: players } = await supabase
+      .from('players')
+      .select('id, name, discord_id')
+      .in('name', extractedNames);
+
+    const playerMap = {};
+    const discordMap = {};
+    if (players) {
+      for (const p of players) {
+        playerMap[p.name] = p.id;
+        if (p.discord_id) discordMap[p.name] = p.discord_id;
+      }
+    }
+
+    // Check for duplicate lineup names
+    const { data: existing } = await supabase
+      .from('lineups')
+      .select('name')
+      .like('name', `${lineupName}%`);
+
+    const count = existing?.length || 0;
+    const finalName = count === 0 ? lineupName : `${lineupName} #${count + 1}`;
+
+    const { data: savedLineup, error: lineupError } = await supabase
+      .from('lineups')
+      .insert({
+        name: finalName,
+        raid_type: raidType,
+        status: 'ready',
+        completed: false,
+        is_template: false,
+      })
+      .select()
+      .single();
+
+    if (lineupError) {
+      console.error('Error saving lineup:', lineupError);
+    }
+
+    if (savedLineup) {
+      const lineupPlayers = extractedNames.map((name, i) => ({
+        lineup_id: savedLineup.id,
+        player_name: name,
+        player_id: playerMap[name] || null,
+        slot_position: i + 1,
+      }));
+
+      const { error: playersError } = await supabase
+        .from('lineup_players')
+        .insert(lineupPlayers);
+
+      if (playersError) {
+        console.error('Error saving lineup players:', playersError);
+      }
+    }
+
+    const allMentions = new Set();
+    const roster = extractedNames
+      .map((name, i) => {
+        const discordId = discordMap[name];
+        if (discordId) {
+          allMentions.add(discordId);
+          return `\`${i + 1}.\` <@${discordId}>`;
+        }
+        return `\`${i + 1}.\` ${name}`;
+      })
+      .join('\n');
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${raidType} Raid`)
+      .setDescription(roster)
+      .setColor(raidType === 'Hardcore' ? 0xe74c3c : 0x3498db)
+      .setImage(attachment.url);
+
+    if (savedLineup) {
+      embed.addFields({
+        name: 'Lineup',
+        value: `Saved as "${finalName}"`,
+        inline: true,
+      });
+    }
+
+    if (parsed.notes) {
+      embed.setFooter({ text: parsed.notes });
+    }
+
+    await message.reactions.removeAll();
+
+    const thread = await message.startThread({
+      name: `${finalName} — Loot`,
+      reason: 'Loot discussion thread from screenshot',
+    });
+
+    await thread.send({ embeds: [embed] });
+
+    if (allMentions.size > 0) {
+      const pingStr = [...allMentions].map((id) => `<@${id}>`).join('\n');
+      await thread.send(pingStr);
+    }
+  } catch (err) {
+    console.error('Loot screenshot error:', err);
+    await message.reactions.removeAll();
+    await message.reply('Failed to process the screenshot. Try a clearer image.');
+  }
+}
+
 module.exports = {
   name: Events.MessageCreate,
   async execute(message) {
-    // Ignore bots and messages outside the loot channel
     if (message.author.bot) return;
     if (message.channel.id !== process.env.LOOT_CHANNEL_ID) return;
 
-    // Must have an image attachment
     const attachment = message.attachments.find((a) =>
       a.contentType?.startsWith('image/')
     );
     if (!attachment) return;
 
-    const { raidType, dateStr } = parseMessage(message.content);
+    let { raidType, lineupName } = parseMessage(message.content);
+
+    // If no message text, ask for a name
+    if (!lineupName) {
+      const prompt = await message.reply(
+        'Give this lineup a name (e.g. "Hardcore Apr 9"). Reply to this message with the name.'
+      );
+
+      const filter = (m) =>
+        m.author.id === message.author.id && m.reference?.messageId === prompt.id;
+
+      try {
+        const collected = await message.channel.awaitMessages({
+          filter,
+          max: 1,
+          time: 60_000,
+          errors: ['time'],
+        });
+        const reply = collected.first();
+        const parsed = parseMessage(reply.content);
+        raidType = parsed.raidType;
+        lineupName = parsed.lineupName || reply.content.trim();
+      } catch {
+        // Timed out — auto-generate a name
+        const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        lineupName = `Raid — ${dateStr}`;
+      }
+    }
 
     if (!raidType) {
-      await message.reply(
-        'Include the raid type in your message (e.g. "Hardcore Apr 9").'
-      );
-      return;
+      raidType = 'Unspecified';
     }
 
-    // React to show we're processing
-    await message.react('⏳');
-
-    try {
-      // Download and detect image type
-      const response = await fetch(attachment.url);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const mimeType = detectMimeType(buffer, attachment.contentType);
-
-      // Get known players for better OCR matching
-      const { data: knownPlayers } = await supabase
-        .from('players')
-        .select('name');
-      const knownNames = (knownPlayers || []).map((p) => p.name);
-
-      // Analyze screenshot
-      const parsed = await analyzeScreenshot(buffer, mimeType, knownNames);
-      const extractedNames = (parsed.players || [])
-        .map((p) => p.name)
-        .filter(Boolean);
-
-      if (extractedNames.length === 0) {
-        await message.reactions.removeAll();
-        await message.reply('No player names found in the screenshot.');
-        return;
-      }
-
-      // Look up players in Supabase
-      const { data: players } = await supabase
-        .from('players')
-        .select('id, name, discord_id')
-        .in('name', extractedNames);
-
-      const playerMap = {};
-      const discordMap = {};
-      if (players) {
-        for (const p of players) {
-          playerMap[p.name] = p.id;
-          if (p.discord_id) discordMap[p.name] = p.discord_id;
-        }
-      }
-
-      // Save lineup to Supabase
-      const baseName = `${raidType} — ${dateStr}`;
-
-      const { data: existing } = await supabase
-        .from('lineups')
-        .select('name')
-        .eq('raid_type', raidType)
-        .like('name', `${baseName}%`);
-
-      const count = existing?.length || 0;
-      const lineupName = count === 0 ? baseName : `${baseName} #${count + 1}`;
-
-      const { data: savedLineup, error: lineupError } = await supabase
-        .from('lineups')
-        .insert({
-          name: lineupName,
-          raid_type: raidType,
-          status: 'ready',
-          completed: false,
-          is_template: false,
-        })
-        .select()
-        .single();
-
-      if (lineupError) {
-        console.error('Error saving lineup:', lineupError);
-      }
-
-      if (savedLineup) {
-        const lineupPlayers = extractedNames.map((name, i) => ({
-          lineup_id: savedLineup.id,
-          player_name: name,
-          player_id: playerMap[name] || null,
-          slot_position: i + 1,
-        }));
-
-        const { error: playersError } = await supabase
-          .from('lineup_players')
-          .insert(lineupPlayers);
-
-        if (playersError) {
-          console.error('Error saving lineup players:', playersError);
-        }
-      }
-
-      // Build roster display
-      const allMentions = new Set();
-      const roster = extractedNames
-        .map((name, i) => {
-          const discordId = discordMap[name];
-          if (discordId) {
-            allMentions.add(discordId);
-            return `\`${i + 1}.\` <@${discordId}>`;
-          }
-          return `\`${i + 1}.\` ${name}`;
-        })
-        .join('\n');
-
-      const embed = new EmbedBuilder()
-        .setTitle(`${raidType} Raid`)
-        .setDescription(roster)
-        .setColor(raidType === 'Hardcore' ? 0xe74c3c : 0x3498db)
-        .setImage(attachment.url);
-
-      if (savedLineup) {
-        embed.addFields({
-          name: 'Lineup',
-          value: `Saved as "${lineupName}"`,
-          inline: true,
-        });
-      }
-
-      if (parsed.notes) {
-        embed.setFooter({ text: parsed.notes });
-      }
-
-      // Remove processing reaction
-      await message.reactions.removeAll();
-
-      // Reply with embed, then create thread on the reply
-      const reply = await message.reply({ embeds: [embed] });
-
-      const thread = await reply.startThread({
-        name: `${raidType} Loot — ${dateStr}${count > 0 ? ` #${count + 1}` : ''}`,
-        reason: 'Loot discussion thread from screenshot',
-      });
-
-      if (allMentions.size > 0) {
-        const pingStr = [...allMentions].map((id) => `<@${id}>`).join('\n');
-        await thread.send(pingStr);
-      }
-    } catch (err) {
-      console.error('Loot screenshot error:', err);
-      await message.reactions.removeAll();
-      await message.reply('Failed to process the screenshot. Try a clearer image.');
-    }
+    await processScreenshot(message, attachment, raidType, lineupName);
   },
 };
