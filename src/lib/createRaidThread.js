@@ -89,12 +89,27 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     .map((p, i) => `\`${i + 1}.\` ${p}`)
     .join('\n');
 
+  const embedFields = [
+    { name: 'Status', value: lineup.completed ? 'Completed' : (lineup.status || 'draft'), inline: true },
+  ];
+
+  // If the lineup has a scheduled time, include it as a Discord dynamic timestamp
+  // (auto-localized per viewer + relative countdown)
+  if (lineup.raid_time) {
+    const unix = Math.floor(new Date(lineup.raid_time).getTime() / 1000);
+    if (!Number.isNaN(unix)) {
+      embedFields.push({
+        name: 'Scheduled',
+        value: `<t:${unix}:F> (<t:${unix}:R>)`,
+        inline: true,
+      });
+    }
+  }
+
   const embed = new EmbedBuilder()
     .setTitle(`${lineup.name} — ${lineup.raid_type}`)
     .setDescription(roster)
-    .addFields(
-      { name: 'Status', value: lineup.completed ? 'Completed' : (lineup.status || 'draft'), inline: true },
-    )
+    .addFields(embedFields)
     .setColor(lineup.raid_type === 'Hardcore' ? 0xe74c3c : 0x3498db);
 
   // Create the thread
