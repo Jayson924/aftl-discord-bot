@@ -2,6 +2,7 @@ const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
 require('dotenv').config();
+const { startThreadRequestHandler } = require('./lib/threadRequestHandler');
 
 const client = new Client({
   intents: [
@@ -35,6 +36,7 @@ if (fs.existsSync(eventsPath)) {
 
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
+  startThreadRequestHandler(client);
 });
 
 client.on('interactionCreate', async (interaction) => {
