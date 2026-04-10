@@ -1,5 +1,6 @@
 const { EmbedBuilder, ChannelType } = require('discord.js');
 const supabase = require('../supabase');
+const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 
 /**
  * Core logic for creating a Discord thread for a raid lineup.
@@ -49,7 +50,7 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
 
   const lineup = lineups[0];
 
-  // Look up discord IDs by player name
+  // Look up discord IDs by player name (for the per-slot roster display)
   const playerNames = (lineup.lineup_players || [])
     .map(lp => lp.player_name)
     .filter(Boolean);
@@ -68,22 +69,16 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     }
   }
 
-  // Build roster
-  const allMentions = new Set();
+  // Build roster — show character name first, then mention so people can tell which char is theirs
   const slots = Array(8).fill('_empty_');
   (lineup.lineup_players || [])
     .sort((a, b) => a.slot_position - b.slot_position)
     .forEach(lp => {
       const idx = lp.slot_position - 1;
       if (idx >= 0 && idx < 8) {
+        const charName = lp.player_name || '_empty_';
         const discordId = discordMap[lp.player_name];
-        let display;
-        if (discordId) {
-          allMentions.add(discordId);
-          display = `<@${discordId}>`;
-        } else {
-          display = lp.player_name || '_empty_';
-        }
+        let display = discordId ? `**${charName}** — <@${discordId}>` : `**${charName}**`;
         if (lp.pilot_name) display += ` (pilot: ${lp.pilot_name})`;
         if (lp.uses_ticket) display += ' 🎟️';
         slots[idx] = display;
@@ -112,10 +107,10 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   // Post lineup embed in the thread
   await thread.send({ embeds: [embed] });
 
-  // Ping players in the thread
-  if (allMentions.size > 0) {
-    const pingStr = [...allMentions].map(id => `<@${id}>`).join('\n');
-    await thread.send(pingStr);
+  // Ping players in the thread — show each mention alongside their character(s)
+  const mentionGroups = await getLineupMentions(lineup.id);
+  if (mentionGroups.length > 0) {
+    await thread.send(formatMentionList(mentionGroups));
   }
 
   // Persist thread id on the lineup row
