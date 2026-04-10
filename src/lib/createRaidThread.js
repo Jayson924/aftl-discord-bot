@@ -2,6 +2,39 @@ const { EmbedBuilder, ChannelType } = require('discord.js');
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 
+// Guild timezone — raid times are displayed here in thread titles
+const GUILD_TIMEZONE = 'Asia/Singapore'; // GMT+8
+
+/**
+ * Format an ISO timestamp as a short human-readable string like "Apr 11 5pm"
+ * or "Apr 11 5:30pm" (omits minutes when :00), in the guild's timezone.
+ */
+function formatShortTime(isoString) {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: GUILD_TIMEZONE,
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).formatToParts(date);
+
+  const lookup = {};
+  for (const p of parts) lookup[p.type] = p.value;
+
+  const month = lookup.month;
+  const day = lookup.day;
+  const hour = lookup.hour;
+  const minute = lookup.minute;
+  const dayPeriod = (lookup.dayPeriod || '').toLowerCase();
+
+  const timeStr = minute === '00' ? `${hour}${dayPeriod}` : `${hour}:${minute}${dayPeriod}`;
+  return `${month} ${day} ${timeStr}`;
+}
+
 /**
  * Core logic for creating a Discord thread for a raid lineup.
  * Used by both the /raidthread slash command and the thread_requests Realtime handler.
@@ -89,9 +122,7 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     .map((p, i) => `\`${i + 1}.\` ${p}`)
     .join('\n');
 
-  const embedFields = [
-    { name: 'Status', value: lineup.completed ? 'Completed' : (lineup.status || 'draft'), inline: true },
-  ];
+  const embedFields = [];
 
   // If the lineup has a scheduled time, include it as a Discord dynamic timestamp
   // (auto-localized per viewer + relative countdown)
@@ -123,9 +154,16 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     .addFields(embedFields)
     .setColor(lineup.raid_type === 'Hardcore' ? 0xe74c3c : 0x3498db);
 
+  // Build thread name — append short time if the lineup has a scheduled raid time
+  const shortTime = lineup.raid_time ? formatShortTime(lineup.raid_time) : null;
+  let threadName = `${lineup.raid_type} ${lineup.name}`;
+  if (shortTime) threadName += ` - ${shortTime}`;
+  // Discord thread names are capped at 100 characters
+  if (threadName.length > 100) threadName = threadName.slice(0, 100);
+
   // Create the thread
   const thread = await channel.threads.create({
-    name: `${lineup.raid_type} — ${lineup.name}`,
+    name: threadName,
     type: ChannelType.PublicThread,
     reason: `Raid thread for ${lineup.name}`,
   });
