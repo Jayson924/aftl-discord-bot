@@ -106,6 +106,17 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     }
   }
 
+  // If the lineup has notes, include them as a non-inline field so they get a full row
+  if (lineup.notes && lineup.notes.trim()) {
+    const notes = lineup.notes.trim();
+    // Discord field values are capped at 1024 chars
+    embedFields.push({
+      name: 'Notes',
+      value: notes.length > 1024 ? notes.slice(0, 1021) + '...' : notes,
+      inline: false,
+    });
+  }
+
   const embed = new EmbedBuilder()
     .setTitle(`${lineup.name} — ${lineup.raid_type}`)
     .setDescription(roster)
