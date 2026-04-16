@@ -12,6 +12,7 @@ module.exports = {
         .addChoices(
           { name: 'Hardcore', value: 'Hardcore' },
           { name: 'Classic', value: 'Classic' },
+          { name: '4-Man', value: '4-man' },
         ),
     ),
 
@@ -49,12 +50,13 @@ module.exports = {
     }
 
     const embeds = lineups.map(lineup => {
-      const players = Array(8).fill('');
+      const lineupSize = lineup.raid_type === '4-man' ? 4 : 8;
+      const players = Array(lineupSize).fill('');
       (lineup.lineup_players || [])
         .sort((a, b) => a.slot_position - b.slot_position)
         .forEach(lp => {
           const idx = lp.slot_position - 1;
-          if (idx >= 0 && idx < 8) {
+          if (idx >= 0 && idx < lineupSize) {
             let display = lp.player_name || '_empty_';
             if (lp.pilot_name) display += ` (pilot: ${lp.pilot_name})`;
             if (lp.uses_ticket) display += ' 🎟️';

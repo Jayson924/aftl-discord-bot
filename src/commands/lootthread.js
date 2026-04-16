@@ -13,6 +13,7 @@ module.exports = {
         .addChoices(
           { name: 'Hardcore', value: 'Hardcore' },
           { name: 'Classic', value: 'Classic' },
+          { name: '4-Man', value: '4-man' },
         ),
     )
     .addAttachmentOption(option =>
@@ -61,9 +62,9 @@ module.exports = {
     const systemPrompt = `You are a Dragon Nest raid party screenshot analyzer. Extract the character names visible in the party/raid list screenshot.
 
 The screenshot may show:
-- A raid party list with up to 8 characters
+- A raid party list with up to 8 characters (full raid) or 4 characters (4-man raid)
 - Each entry typically shows "Lv. 50 CharacterName" with a character portrait
-- The party list is usually arranged in a 2-column grid (4 rows × 2 columns)
+- Full raids are arranged in a 2-column grid (4 rows × 2 columns); 4-man parties may show a single column or a shorter list
 - Names might be partially obscured or have special characters
 - Read left-to-right, top-to-bottom (left column entry first, then right column entry, for each row)
 

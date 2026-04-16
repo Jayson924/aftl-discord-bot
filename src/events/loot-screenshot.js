@@ -6,10 +6,17 @@ function parseMessage(text) {
   const lower = trimmed.toLowerCase();
 
   let raidType = null;
-  if (lower.includes('hardcore') || lower.includes('hc')) raidType = 'Hardcore';
+  // Check 4-man first so '4-man hardcore' (etc.) doesn't mismatch on 'hc'
+  if (lower.includes('4-man') || lower.includes('4man')) raidType = '4-man';
+  else if (lower.includes('hardcore') || lower.includes('hc')) raidType = 'Hardcore';
   else if (lower.includes('classic')) raidType = 'Classic';
 
   return { raidType, lineupName: trimmed || null };
+}
+
+// Returns the number of lineup slots for a given raid type
+function getLineupSize(raidType) {
+  return raidType === '4-man' ? 4 : 8;
 }
 
 async function analyzeScreenshot(buffer, mimeType, knownNames) {
@@ -22,9 +29,9 @@ async function analyzeScreenshot(buffer, mimeType, knownNames) {
   const systemPrompt = `You are a Dragon Nest raid party screenshot analyzer. Extract the character names visible in the party/raid list screenshot.
 
 The screenshot may show:
-- A raid party list with up to 8 characters
+- A raid party list with up to 8 characters (full raid) or 4 characters (4-man raid)
 - Each entry typically shows "Lv. 50 CharacterName" with a character portrait
-- The party list is usually arranged in a 2-column grid (4 rows × 2 columns)
+- Full raids are arranged in a 2-column grid (4 rows × 2 columns); 4-man parties may show a single column or a shorter list
 - Names might be partially obscured or have special characters
 - Read left-to-right, top-to-bottom (left column entry first, then right column entry, for each row)
 
@@ -114,6 +121,11 @@ async function processScreenshot(message, attachment, raidType, lineupName) {
       await message.reactions.removeAll();
       await message.reply('No player names found in the screenshot.');
       return;
+    }
+
+    // Auto-detect 4-man if the screenshot has 4 or fewer players and no raid type was specified
+    if ((raidType === 'Unspecified' || !raidType) && extractedNames.length <= 4) {
+      raidType = '4-man';
     }
 
     const { data: players } = await supabase

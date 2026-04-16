@@ -103,12 +103,13 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   }
 
   // Build roster — show character name first, then mention so people can tell which char is theirs
-  const slots = Array(8).fill('_empty_');
+  const lineupSize = lineup.raid_type === '4-man' ? 4 : 8;
+  const slots = Array(lineupSize).fill('_empty_');
   (lineup.lineup_players || [])
     .sort((a, b) => a.slot_position - b.slot_position)
     .forEach(lp => {
       const idx = lp.slot_position - 1;
-      if (idx >= 0 && idx < 8) {
+      if (idx >= 0 && idx < lineupSize) {
         const charName = lp.player_name || '_empty_';
         const discordId = discordMap[lp.player_name];
         let display = discordId ? `**${charName}** — <@${discordId}>` : `**${charName}**`;
