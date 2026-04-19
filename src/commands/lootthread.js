@@ -243,5 +243,17 @@ Rules:
       const pingStr = [...allMentions].map(id => `<@${id}>`).join('\n');
       await thread.send(`${pingStr}`);
     }
+
+    // Persist thread id on the lineup row
+    if (savedLineup) {
+      const { error: threadIdError } = await supabase
+        .from('lineups')
+        .update({ thread_id: thread.id })
+        .eq('id', savedLineup.id);
+
+      if (threadIdError) {
+        console.error('Failed to persist thread_id on lineup:', threadIdError);
+      }
+    }
   },
 };

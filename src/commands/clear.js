@@ -14,12 +14,15 @@ module.exports = {
     }
 
     // Look up the lineup linked to this thread
+    console.log('[Clear] Looking up lineup for thread_id:', threadId, typeof threadId);
     const { data: lineup, error } = await supabase
       .from('lineups')
       .select('id, name, completed')
       .eq('thread_id', threadId)
       .limit(1)
       .single();
+
+    console.log('[Clear] Query result:', { lineup, error });
 
     if (error || !lineup) {
       return interaction.reply({ content: 'No lineup found for this thread.', ephemeral: true });
