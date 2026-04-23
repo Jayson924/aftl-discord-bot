@@ -162,15 +162,30 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   // Discord thread names are capped at 100 characters
   if (threadName.length > 100) threadName = threadName.slice(0, 100);
 
-  // Create the thread
-  const thread = await channel.threads.create({
-    name: threadName,
-    type: ChannelType.PublicThread,
-    reason: `Raid thread for ${lineup.name}`,
-  });
+  // Forum channels create posts (which are threads) — the embed must be the
+  // initial message, and `type` must NOT be set. Text channels take `type` and
+  // the embed gets posted as a follow-up message after creation.
+  const isForum = channel.type === ChannelType.GuildForum;
 
-  // Post lineup embed in the thread
-  await thread.send({ embeds: [embed] });
+  let thread;
+  let embedMessage;
+
+  if (isForum) {
+    thread = await channel.threads.create({
+      name: threadName,
+      message: { embeds: [embed] },
+      reason: `Raid thread for ${lineup.name}`,
+    });
+    // The starter message of a forum post IS the embed message we just sent.
+    embedMessage = await thread.fetchStarterMessage();
+  } else {
+    thread = await channel.threads.create({
+      name: threadName,
+      type: ChannelType.PublicThread,
+      reason: `Raid thread for ${lineup.name}`,
+    });
+    embedMessage = await thread.send({ embeds: [embed] });
+  }
 
   // Ping players in the thread — show each mention alongside their character(s)
   const mentionGroups = await getLineupMentions(lineup.id);
@@ -178,10 +193,11 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     await thread.send(formatMentionList(mentionGroups));
   }
 
-  // Persist thread id on the lineup row
+  // Persist thread id + embed message id on the lineup row so update requests
+  // can edit the embed in place.
   const { error: updateError } = await supabase
     .from('lineups')
-    .update({ thread_id: thread.id })
+    .update({ thread_id: thread.id, thread_message_id: embedMessage.id })
     .eq('id', lineup.id);
 
   if (updateError) {

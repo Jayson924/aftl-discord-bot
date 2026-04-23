@@ -1,36 +1,48 @@
 const supabase = require('../supabase');
 const { createRaidThread } = require('./createRaidThread');
+const { updateRaidThread } = require('./updateRaidThread');
 
 // Default channel to create raid threads in when a request doesn't specify one.
 // Override with RAID_THREAD_CHANNEL_ID env var.
-const DEFAULT_RAID_CHANNEL_ID = process.env.RAID_THREAD_CHANNEL_ID || '1492287028220395601';
+const DEFAULT_RAID_CHANNEL_ID = process.env.RAID_THREAD_CHANNEL_ID || '1496954808324587680';
 
 /**
- * Process a single thread_requests row: fetch channel, create thread, update row.
+ * Process a single thread_requests row: dispatch by action, create or update,
+ * then mark the row done/error.
  * @param {import('discord.js').Client} client
  * @param {Object} request - thread_requests row
  */
 async function processThreadRequest(client, request) {
-  console.log(`[ThreadRequests] Processing request ${request.id} for lineup ${request.lineup_id}`);
+  const action = request.action || 'create';
+  console.log(`[ThreadRequests] Processing request ${request.id} (${action}) for lineup ${request.lineup_id}`);
 
   try {
-    const channelId = request.channel_id || DEFAULT_RAID_CHANNEL_ID;
-    const channel = await client.channels.fetch(channelId);
+    let resultThreadId;
 
-    if (!channel) {
-      throw new Error(`Channel ${channelId} not found or bot lacks access.`);
+    if (action === 'update') {
+      const { thread } = await updateRaidThread({
+        client,
+        lineupId: request.lineup_id,
+      });
+      resultThreadId = thread.id;
+    } else {
+      const channelId = request.channel_id || DEFAULT_RAID_CHANNEL_ID;
+      const channel = await client.channels.fetch(channelId);
+      if (!channel) {
+        throw new Error(`Channel ${channelId} not found or bot lacks access.`);
+      }
+      const { thread } = await createRaidThread({
+        channel,
+        lineupId: request.lineup_id,
+      });
+      resultThreadId = thread.id;
     }
-
-    const { thread } = await createRaidThread({
-      channel,
-      lineupId: request.lineup_id,
-    });
 
     const { error: updateError } = await supabase
       .from('thread_requests')
       .update({
         status: 'done',
-        thread_id: thread.id,
+        thread_id: resultThreadId,
         updated_at: new Date().toISOString(),
       })
       .eq('id', request.id);
@@ -38,7 +50,7 @@ async function processThreadRequest(client, request) {
     if (updateError) {
       console.error('[ThreadRequests] Failed to mark request done:', updateError);
     } else {
-      console.log(`[ThreadRequests] Request ${request.id} done (thread ${thread.id})`);
+      console.log(`[ThreadRequests] Request ${request.id} done (thread ${resultThreadId})`);
     }
   } catch (err) {
     console.error(`[ThreadRequests] Failed to process request ${request.id}:`, err);
