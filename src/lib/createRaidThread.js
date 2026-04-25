@@ -167,6 +167,13 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   // the embed gets posted as a follow-up message after creation.
   const isForum = channel.type === ChannelType.GuildForum;
 
+  // Match a forum tag whose name equals the lineup's raid_type (e.g.
+  // "Hardcore", "Classic"). Skipped if the tag doesn't exist.
+  const raidTypeTag = isForum
+    ? (channel.availableTags || []).find(t => t.name.toLowerCase() === lineup.raid_type.toLowerCase())
+    : null;
+  const appliedTags = raidTypeTag ? [raidTypeTag.id] : undefined;
+
   let thread;
   let embedMessage;
 
@@ -174,6 +181,7 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     thread = await channel.threads.create({
       name: threadName,
       message: { embeds: [embed] },
+      appliedTags,
       reason: `Raid thread for ${lineup.name}`,
     });
     // The starter message of a forum post IS the embed message we just sent.
