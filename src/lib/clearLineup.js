@@ -22,6 +22,83 @@ async function applyCompletedTag(thread) {
   return true;
 }
 
+/**
+ * Mark each player in the lineup as having completed this week's raid.
+ * Mirrors data.js#markPlayersCompleted on the web app.
+ *
+ * - Hardcore: sets `hardcore_completed = now()`
+ * - Classic:  sets `classic_completed = now()`, and `classic_ticket_used = now()`
+ *             for any lineup_player with `uses_ticket = true`
+ * - 4-man / Unspecified: skipped (no weekly tracking)
+ */
+async function markPlayersCompletedForLineup(lineup) {
+  if (lineup.raid_type !== 'Hardcore' && lineup.raid_type !== 'Classic') {
+    return { updated: 0, ticketUpdated: 0 };
+  }
+
+  const { data: lineupPlayers, error: lpError } = await supabase
+    .from('lineup_players')
+    .select('player_name, player_id, uses_ticket')
+    .eq('lineup_id', lineup.id);
+
+  if (lpError || !lineupPlayers || lineupPlayers.length === 0) {
+    return { updated: 0, ticketUpdated: 0 };
+  }
+
+  const ids = lineupPlayers.map(lp => lp.player_id).filter(Boolean);
+  const namesWithoutId = lineupPlayers
+    .filter(lp => !lp.player_id && lp.player_name)
+    .map(lp => lp.player_name);
+
+  const column = lineup.raid_type === 'Hardcore' ? 'hardcore_completed' : 'classic_completed';
+  const now = new Date().toISOString();
+
+  let updated = 0;
+  if (ids.length > 0) {
+    const { error, count } = await supabase
+      .from('players')
+      .update({ [column]: now }, { count: 'exact' })
+      .in('id', ids);
+    if (error) console.error('[clearLineup] failed to mark by id:', error);
+    else updated += count || 0;
+  }
+  if (namesWithoutId.length > 0) {
+    const { error, count } = await supabase
+      .from('players')
+      .update({ [column]: now }, { count: 'exact' })
+      .in('name', namesWithoutId);
+    if (error) console.error('[clearLineup] failed to mark by name:', error);
+    else updated += count || 0;
+  }
+
+  let ticketUpdated = 0;
+  if (lineup.raid_type === 'Classic') {
+    const ticketIds = lineupPlayers.filter(lp => lp.uses_ticket && lp.player_id).map(lp => lp.player_id);
+    const ticketNames = lineupPlayers
+      .filter(lp => lp.uses_ticket && !lp.player_id && lp.player_name)
+      .map(lp => lp.player_name);
+
+    if (ticketIds.length > 0) {
+      const { error, count } = await supabase
+        .from('players')
+        .update({ classic_ticket_used: now }, { count: 'exact' })
+        .in('id', ticketIds);
+      if (error) console.error('[clearLineup] failed to mark tickets by id:', error);
+      else ticketUpdated += count || 0;
+    }
+    if (ticketNames.length > 0) {
+      const { error, count } = await supabase
+        .from('players')
+        .update({ classic_ticket_used: now }, { count: 'exact' })
+        .in('name', ticketNames);
+      if (error) console.error('[clearLineup] failed to mark tickets by name:', error);
+      else ticketUpdated += count || 0;
+    }
+  }
+
+  return { updated, ticketUpdated };
+}
+
 async function createLootThread(lineup, raidThread) {
   const lootChannelId = process.env.LOOT_CHANNEL_ID;
   if (!lootChannelId) return null;
@@ -116,6 +193,16 @@ async function clearLineup({ lineup, raidThread, skipTag = false }) {
 
   if (updateError) return { tagged: false, lootThread: null, updateError };
 
+  let playersUpdated = 0;
+  let ticketsUpdated = 0;
+  try {
+    const r = await markPlayersCompletedForLineup(lineup);
+    playersUpdated = r.updated;
+    ticketsUpdated = r.ticketUpdated;
+  } catch (err) {
+    console.error('[clearLineup] failed to mark player weekly completions:', err);
+  }
+
   let tagged = false;
   if (!skipTag) {
     tagged = await applyCompletedTag(raidThread).catch(err => {
@@ -131,7 +218,7 @@ async function clearLineup({ lineup, raidThread, skipTag = false }) {
     console.error('[clearLineup] failed to create loot thread:', err);
   }
 
-  return { tagged, lootThread };
+  return { tagged, lootThread, playersUpdated, ticketsUpdated };
 }
 
 module.exports = {
@@ -139,5 +226,6 @@ module.exports = {
   applyCompletedTag,
   getCompletedTag,
   createLootThread,
+  markPlayersCompletedForLineup,
   COMPLETED_TAG_NAME,
 };
