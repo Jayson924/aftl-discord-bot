@@ -208,4 +208,4 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   return { thread, lineup };
 }
 
-module.exports = { createRaidThread };
+module.exports = { createRaidThread, formatShortTime };

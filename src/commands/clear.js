@@ -16,7 +16,7 @@ module.exports = {
 
     const { data: lineup, error } = await supabase
       .from('lineups')
-      .select('id, name, raid_type, completed')
+      .select('id, name, raid_type, raid_time, completed')
       .eq('thread_id', threadId)
       .limit(1)
       .single();

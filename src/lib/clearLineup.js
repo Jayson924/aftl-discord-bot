@@ -1,8 +1,9 @@
 const { EmbedBuilder, ChannelType } = require('discord.js');
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
+const { formatShortTime } = require('./createRaidThread');
 
-const COMPLETED_TAG_NAME = process.env.RAID_COMPLETED_TAG_NAME || 'Completed';
+const COMPLETED_TAG_NAME = process.env.RAID_COMPLETED_TAG_NAME || 'Cleared';
 
 function getCompletedTag(forumChannel) {
   if (!forumChannel || forumChannel.type !== ChannelType.GuildForum) return null;
@@ -138,7 +139,12 @@ async function createLootThread(lineup, raidThread) {
     .addFields({ name: 'Raid thread', value: `<#${raidThread.id}>`, inline: true })
     .setColor(lineup.raid_type === 'Hardcore' ? 0xe74c3c : 0x3498db);
 
-  const threadName = `${lineup.name} — Loot`.slice(0, 100);
+  // Match the raid thread naming so paired raid + loot threads are easy to spot:
+  //   "<raid_type> <name>"  optionally suffixed with " - <shortTime>"
+  const shortTime = lineup.raid_time ? formatShortTime(lineup.raid_time) : null;
+  let threadName = `${lineup.raid_type} ${lineup.name}`;
+  if (shortTime) threadName += ` - ${shortTime}`;
+  if (threadName.length > 100) threadName = threadName.slice(0, 100);
 
   const isForum = lootChannel.type === ChannelType.GuildForum;
   let lootThread;

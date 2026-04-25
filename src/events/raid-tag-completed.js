@@ -23,7 +23,7 @@ module.exports = {
 
     const completedTag = getCompletedTag(parent);
     if (!completedTag) {
-      console.log(`[raid-tag-completed] forum "${parent.name}" has no Completed tag — skipping`);
+      console.log(`[raid-tag-completed] forum "${parent.name}" has no Cleared tag — skipping`);
       return;
     }
 
@@ -33,7 +33,7 @@ module.exports = {
     // Only fire on the not-completed -> completed transition
     if (wasCompleted || !isCompleted) return;
 
-    console.log(`[raid-tag-completed] Completed tag applied to thread ${newThread.id} (${newThread.name})`);
+    console.log(`[raid-tag-completed] Cleared tag applied to thread ${newThread.id} (${newThread.name})`);
 
     if (inFlight.has(newThread.id)) return;
     inFlight.add(newThread.id);
@@ -41,7 +41,7 @@ module.exports = {
     try {
       const { data: lineup, error } = await supabase
         .from('lineups')
-        .select('id, name, raid_type, completed')
+        .select('id, name, raid_type, raid_time, completed')
         .eq('thread_id', newThread.id)
         .limit(1)
         .single();
@@ -63,7 +63,7 @@ module.exports = {
         return;
       }
 
-      const parts = [`**${lineup.name}** marked as cleared via \`Completed\` tag.`];
+      const parts = [`**${lineup.name}** marked as cleared via \`Cleared\` tag.`];
       if (result.lootThread) parts.push(`Loot thread: <#${result.lootThread.id}>`);
       await newThread.send(parts.join('\n')).catch(err => {
         console.error('[raid-tag-completed] failed to send confirmation:', err);
