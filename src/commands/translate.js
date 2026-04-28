@@ -18,7 +18,9 @@ const LOCALE_TO_LANGUAGE = {
   ms: 'Malay',
   ja: 'Japanese',
   ko: 'Korean',
-  zh: 'Chinese',
+  zh: 'Mandarin Chinese (Simplified)',
+  'zh-CN': 'Mandarin Chinese (Simplified)',
+  'zh-TW': 'Mandarin Chinese (Traditional)',
   es: 'Spanish',
   fr: 'French',
   de: 'German',
@@ -28,7 +30,7 @@ const LOCALE_TO_LANGUAGE = {
   th: 'Thai',
 };
 
-const SYSTEM_PROMPT = `You are a translator for a gaming guild's Discord server. Members write in English, Filipino (Tagalog), Cebuano (Bisaya), Indonesian, Malay, and other languages, and frequently mix English with their native language (e.g. Taglish, Bislish).
+const SYSTEM_PROMPT = `You are a translator for a gaming guild's Discord server. Members write in English, Filipino (Tagalog), Cebuano (Bisaya), Indonesian, Malay, Mandarin Chinese, Singlish, and other languages, and frequently mix English with their native language (e.g. Taglish, Bislish, or Singlish particles like "lah", "lor", "leh", "meh", "can or not").
 
 Translate the user's message to the requested target language. Rules:
 - Preserve gaming jargon, character names, and proper nouns as-is (don't translate them)
@@ -64,8 +66,12 @@ module.exports = {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const localeCode = (interaction.locale || 'en').split('-')[0];
-    const targetLanguage = LOCALE_TO_LANGUAGE[localeCode] || 'English';
+    const fullLocale = interaction.locale || 'en';
+    const baseLocale = fullLocale.split('-')[0];
+    const targetLanguage =
+      LOCALE_TO_LANGUAGE[fullLocale] ||
+      LOCALE_TO_LANGUAGE[baseLocale] ||
+      'English';
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5',
