@@ -3,9 +3,39 @@ const {
   ApplicationCommandType,
   MessageFlags,
 } = require('discord.js');
+const Anthropic = require('@anthropic-ai/sdk');
 const { checkAndConsume } = require('../lib/rateLimiter');
 
 const RATE_LIMIT = { limit: 20, windowMs: 60_000 };
+
+const anthropic = new Anthropic();
+
+const LOCALE_TO_LANGUAGE = {
+  en: 'English',
+  fil: 'Filipino (Tagalog)',
+  tl: 'Filipino (Tagalog)',
+  id: 'Indonesian',
+  ms: 'Malay',
+  ja: 'Japanese',
+  ko: 'Korean',
+  zh: 'Chinese',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  pt: 'Portuguese',
+  ru: 'Russian',
+  vi: 'Vietnamese',
+  th: 'Thai',
+};
+
+const SYSTEM_PROMPT = `You are a translator for an AFK Journey gaming guild's Discord server. Members write in English, Filipino (Tagalog), Indonesian, Malay, and other languages, and frequently mix English with their native language (e.g. Taglish).
+
+Translate the user's message to the requested target language. Rules:
+- Preserve gaming jargon, character names, and proper nouns as-is (don't translate them)
+- Match the casual, conversational tone of Discord chat
+- If the message is already in the target language, respond with exactly: ALREADY_TARGET
+- Do not add explanations, notes, or quotation marks around the translation
+- Output only the translated text, nothing else`;
 
 module.exports = {
   data: new ContextMenuCommandBuilder()
@@ -34,41 +64,40 @@ module.exports = {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const target = (interaction.locale || 'en').split('-')[0];
+    const localeCode = (interaction.locale || 'en').split('-')[0];
+    const targetLanguage = LOCALE_TO_LANGUAGE[localeCode] || 'English';
 
-    const url = new URL('https://translation.googleapis.com/language/translate/v2');
-    url.searchParams.set('key', process.env.GOOGLE_TRANSLATE_API_KEY);
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: text, target, format: 'text' }),
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 1024,
+      system: [
+        {
+          type: 'text',
+          text: SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
+      messages: [
+        {
+          role: 'user',
+          content: `Translate to ${targetLanguage}:\n\n${text}`,
+        },
+      ],
     });
 
-    if (!res.ok) {
-      const body = await res.text();
-      console.error('Google Translate error:', res.status, body);
-      await interaction.editReply('Translation failed. Try again later.');
-      return;
-    }
+    const translated = response.content
+      .filter(block => block.type === 'text')
+      .map(block => block.text)
+      .join('')
+      .trim();
 
-    const data = await res.json();
-    const result = data.data?.translations?.[0];
-    if (!result) {
-      await interaction.editReply('Translation failed. Try again later.');
-      return;
-    }
-
-    const detected = result.detectedSourceLanguage;
-    const translated = result.translatedText;
-
-    if (detected === target) {
-      await interaction.editReply(`Already in ${target}. No translation needed.`);
+    if (translated === 'ALREADY_TARGET') {
+      await interaction.editReply(`Already in ${targetLanguage}. No translation needed.`);
       return;
     }
 
     await interaction.editReply(
-      `**${detected} → ${target}**\n${translated}`,
+      `**Translated to ${targetLanguage}**\n${translated}`,
     );
   },
 };

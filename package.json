@@ -9,6 +9,7 @@
     "deploy-commands": "node src/deploy-commands.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.91.1",
     "@supabase/supabase-js": "^2.102.1",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.7"
