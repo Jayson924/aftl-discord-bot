@@ -3,7 +3,7 @@ const { SlashCommandBuilder } = require('discord.js');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('leave-server')
-    .setDescription('Force the bot to leave a server (owner only)')
+    .setDescription('')
     .addStringOption(option =>
       option
         .setName('guild_id')

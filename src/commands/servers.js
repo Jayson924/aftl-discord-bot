@@ -3,7 +3,7 @@ const { SlashCommandBuilder } = require('discord.js');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('servers')
-    .setDescription('List servers the bot is installed on (owner only)'),
+    .setDescription(''),
 
   async execute(interaction) {
     if (interaction.user.id !== process.env.OWNER_ID) {
