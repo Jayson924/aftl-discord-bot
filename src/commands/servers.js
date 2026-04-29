@@ -3,7 +3,7 @@ const { SlashCommandBuilder } = require('discord.js');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('servers')
-    .setDescription(''),
+    .setDescription('swipe debugging'),
 
   async execute(interaction) {
     if (interaction.user.id !== process.env.OWNER_ID) {

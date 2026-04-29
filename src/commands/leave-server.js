@@ -3,7 +3,7 @@ const { SlashCommandBuilder } = require('discord.js');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('leave-server')
-    .setDescription('')
+    .setDescription('swipe debugging')
     .addStringOption(option =>
       option
         .setName('guild_id')
