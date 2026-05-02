@@ -46,26 +46,33 @@ const CLASS_FAMILIES = {
   },
 };
 
+const { getClassEmojiData } = require('./classEmojis');
+
+function withEmoji(label, option) {
+  const emoji = getClassEmojiData(label);
+  return emoji ? { ...option, emoji } : option;
+}
+
 function getFamilyOptions() {
-  return Object.entries(CLASS_FAMILIES).map(([key, fam]) => ({
-    label: fam.name,
-    value: key,
-  }));
+  return Object.entries(CLASS_FAMILIES).map(([key, fam]) =>
+    withEmoji(fam.name, { label: fam.name, value: key })
+  );
 }
 
 function getSpecOptions(familyKey) {
   const fam = CLASS_FAMILIES[familyKey];
   if (!fam) return [];
-  return Object.entries(fam.specializations).map(([key, spec]) => ({
-    label: spec.name,
-    value: key,
-  }));
+  return Object.entries(fam.specializations).map(([key, spec]) =>
+    withEmoji(spec.name, { label: spec.name, value: key })
+  );
 }
 
 function getFinalClassOptions(familyKey, specKey) {
   const spec = CLASS_FAMILIES[familyKey]?.specializations?.[specKey];
   if (!spec) return [];
-  return spec.classes.map(name => ({ label: name, value: name }));
+  return spec.classes.map(name =>
+    withEmoji(name, { label: name, value: name })
+  );
 }
 
 module.exports = { CLASS_FAMILIES, getFamilyOptions, getSpecOptions, getFinalClassOptions };

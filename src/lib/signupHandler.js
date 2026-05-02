@@ -12,6 +12,7 @@ const supabase = require('../supabase');
 const { wouldConflict } = require('./accountConflicts');
 const { updateRaidThread } = require('./updateRaidThread');
 const { getFamilyOptions, getSpecOptions, getFinalClassOptions, CLASS_FAMILIES } = require('./classData');
+const { getClassEmojiTag } = require('./classEmojis');
 
 // In-memory stash for multi-step request state. Keyed by short request id.
 // Lost on bot restart — acceptable for v1: pending approvals are short-lived.
@@ -42,7 +43,7 @@ async function getLineupWithPlayers(lineupId) {
 async function getCharactersOwnedBy(discordId) {
   const { data, error } = await supabase
     .from('players')
-    .select('id, name, discord_id, account_number, exclude, exclude_label, hardcore_completed, classic_completed, classic_ticket_used')
+    .select('id, name, role, discord_id, account_number, exclude, exclude_label, hardcore_completed, classic_completed, classic_ticket_used')
     .eq('discord_id', discordId);
   if (error) throw error;
   return data || [];
@@ -587,9 +588,12 @@ async function postApprovalRequest(interaction, lineupId, character, usesTicket,
 
   let charLine;
   if (character) {
-    charLine = `Character: **${character.name}**${usesTicket ? ' — Pania ticket 🎟️' : ''}`;
+    const emoji = getClassEmojiTag(character.role);
+    const classBit = character.role ? ` ${emoji ? emoji + ' ' : ''}${character.role}` : '';
+    charLine = `Character: **${character.name}**${classBit}${usesTicket ? ' — Pania ticket 🎟️' : ''}`;
   } else if (guest) {
-    charLine = `Guest: **${guest.name}** (${guest.finalClass})${usesTicket ? ' — Pania ticket 🎟️' : ''}`;
+    const emoji = getClassEmojiTag(guest.finalClass);
+    charLine = `Guest: **${guest.name}** ${emoji ? emoji + ' ' : ''}${guest.finalClass}${usesTicket ? ' — Pania ticket 🎟️' : ''}`;
   } else {
     charLine = 'Character: _none registered_';
   }

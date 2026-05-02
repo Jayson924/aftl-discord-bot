@@ -1,6 +1,7 @@
 const { EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
+const { getClassEmojiTag } = require('./classEmojis');
 
 // Guild timezone — raid times are displayed here in thread titles
 const GUILD_TIMEZONE = 'Asia/Singapore'; // GMT+8
@@ -89,15 +90,17 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     .filter(Boolean);
 
   const discordMap = {};
+  const roleMap = {};
   if (playerNames.length > 0) {
     const { data: players } = await supabase
       .from('players')
-      .select('name, discord_id')
+      .select('name, discord_id, role')
       .in('name', playerNames);
 
     if (players) {
       for (const p of players) {
         if (p.discord_id) discordMap[p.name] = p.discord_id;
+        if (p.role) roleMap[p.name] = p.role;
       }
     }
   }
@@ -110,9 +113,26 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     .forEach(lp => {
       const idx = lp.slot_position - 1;
       if (idx >= 0 && idx < lineupSize) {
-        const charName = lp.player_name || '_empty_';
-        const discordId = discordMap[lp.player_name];
-        let display = discordId ? `**${charName}** — <@${discordId}>` : `**${charName}**`;
+        const rawName = lp.player_name || '';
+        // Guest format: [PUB]Name|Class — extract for display + emoji
+        let charName = rawName || '_empty_';
+        let classForEmoji = roleMap[rawName] || null;
+        if (rawName.startsWith('[PUB]')) {
+          const body = rawName.slice(5);
+          const pipe = body.indexOf('|');
+          if (pipe !== -1) {
+            charName = body.slice(0, pipe);
+            classForEmoji = body.slice(pipe + 1);
+          } else {
+            charName = body;
+          }
+        }
+        const emoji = classForEmoji ? getClassEmojiTag(classForEmoji) : '';
+        const emojiPrefix = emoji ? `${emoji} ` : '';
+        const discordId = discordMap[rawName];
+        let display = discordId
+          ? `${emojiPrefix}**${charName}** — <@${discordId}>`
+          : `${emojiPrefix}**${charName}**`;
         if (lp.pilot_name) display += ` (pilot: ${lp.pilot_name})`;
         if (lp.uses_ticket) display += ' 🎟️';
         slots[idx] = display;
