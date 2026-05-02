@@ -57,6 +57,8 @@ async function buildLineupView(lineup) {
   // Display names per slot (cleaned of [PUB]...|... wrappers) — used for
   // diffing against the embed since the embed contains the cleaned form.
   const displayNamesPerSlot = Array(lineupSize).fill(null);
+  // Cleaned display name → class, so update messages can render emoji per name.
+  const displayNameToRole = {};
   (lineup.lineup_players || [])
     .sort((a, b) => a.slot_position - b.slot_position)
     .forEach(lp => {
@@ -76,6 +78,7 @@ async function buildLineupView(lineup) {
           }
         }
         displayNamesPerSlot[idx] = charName;
+        if (classForEmoji) displayNameToRole[charName] = classForEmoji;
         const emoji = classForEmoji ? getClassEmojiTag(classForEmoji) : '';
         const emojiPrefix = emoji ? `${emoji} ` : '';
         const discordId = discordMap[rawName];
@@ -139,6 +142,7 @@ async function buildLineupView(lineup) {
     rosterCharNames: displayNamesPerSlot.filter(Boolean),
     discordMap,
     idToChars,
+    displayNameToRole,
   };
 }
 
@@ -304,6 +308,27 @@ async function updateRaidThread({ client, lineupId }) {
   if (rosterChanged) {
     const lines = ['🔄 **Lineup updated**'];
 
+    // Look up roles for removed names from the players table (they're no
+    // longer in the lineup, so view.displayNameToRole won't have them).
+    // Guests (no row in players) just won't get an emoji.
+    const removedNameToRole = {};
+    if (removedNames.length > 0) {
+      const { data: removedPlayers } = await supabase
+        .from('players')
+        .select('name, role')
+        .in('name', removedNames);
+      if (removedPlayers) {
+        for (const p of removedPlayers) {
+          if (p.role) removedNameToRole[p.name] = p.role;
+        }
+      }
+    }
+
+    const withEmoji = (name, role) => {
+      const emoji = role ? getClassEmojiTag(role) : '';
+      return emoji ? `${emoji} ${name}` : name;
+    };
+
     if (addedNames.length > 0) {
       // Ping owners of newly added characters with their char names
       const addedByDiscordId = new Map();
@@ -311,19 +336,26 @@ async function updateRaidThread({ client, lineupId }) {
         const did = view.discordMap[name];
         if (!did) continue;
         if (!addedByDiscordId.has(did)) addedByDiscordId.set(did, []);
-        addedByDiscordId.get(did).push(name);
+        addedByDiscordId.get(did).push({ name, role: view.displayNameToRole[name] || null });
       }
       const mentions = [...addedByDiscordId.entries()]
-        .map(([discordId, characterNames]) => formatMention({ discordId, characterNames }))
+        .map(([discordId, characters]) => formatMention({ discordId, characters }))
         .join('\n');
       const addedNoOwner = addedNames.filter(n => !view.discordMap[n]);
       lines.push(`**Added:**`);
       if (mentions) lines.push(mentions);
-      if (addedNoOwner.length > 0) lines.push(addedNoOwner.map(n => `• ${n}`).join('\n'));
+      if (addedNoOwner.length > 0) {
+        lines.push(addedNoOwner
+          .map(n => `• ${withEmoji(n, view.displayNameToRole[n] || null)}`)
+          .join('\n'));
+      }
     }
 
     if (removedNames.length > 0) {
-      lines.push(`**Removed:** ${removedNames.join(', ')}`);
+      const removedLabelled = removedNames
+        .map(n => withEmoji(n, removedNameToRole[n] || null))
+        .join(', ');
+      lines.push(`**Removed:** ${removedLabelled}`);
     }
 
     await thread.send(lines.join('\n'));
