@@ -3,11 +3,15 @@ const {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require('discord.js');
 const crypto = require('crypto');
 const supabase = require('../supabase');
 const { wouldConflict } = require('./accountConflicts');
 const { updateRaidThread } = require('./updateRaidThread');
+const { getFamilyOptions, getSpecOptions, getFinalClassOptions, CLASS_FAMILIES } = require('./classData');
 
 // In-memory stash for multi-step request state. Keyed by short request id.
 // Lost on bot restart — acceptable for v1: pending approvals are short-lived.
@@ -38,10 +42,23 @@ async function getLineupWithPlayers(lineupId) {
 async function getCharactersOwnedBy(discordId) {
   const { data, error } = await supabase
     .from('players')
-    .select('id, name, discord_id, account_number, exclude, exclude_label')
+    .select('id, name, discord_id, account_number, exclude, exclude_label, hardcore_completed, classic_completed, classic_ticket_used')
     .eq('discord_id', discordId);
   if (error) throw error;
   return data || [];
+}
+
+// A character is eligible for a raid_type if they still have a clear available
+// this week. Weekly cleanup nulls these timestamps every Friday 5pm PT, so
+// "non-null" == "already cleared this week".
+function isCharacterEligible(character, raidType) {
+  if (raidType === 'Hardcore') return !character.hardcore_completed;
+  if (raidType === 'Classic') {
+    // Classic gives 1 base clear + 1 ticket clear per week — eligible if either is unused.
+    return !character.classic_completed || !character.classic_ticket_used;
+  }
+  // 4-man / unknown — no completion model wired in, treat as always eligible.
+  return true;
 }
 
 async function getPlayersByName(names) {
@@ -135,15 +152,24 @@ async function handle(interaction, client) {
     const action = parts[1];
 
     if (interaction.isButton()) {
-      if (action === 'join') return void await handleJoinClick(interaction, parts[2]);
-      if (action === 'drop') return void await handleDropClick(interaction, parts[2], client);
-      if (action === 'approve') return void await handleApproveClick(interaction, parts[2], client);
-      if (action === 'deny') return void await handleDenyClick(interaction, parts[2]);
+      if (action === 'join')      return void await handleJoinClick(interaction, parts[2]);
+      if (action === 'drop')      return void await handleDropClick(interaction, parts[2], client);
+      if (action === 'approve')   return void await handleApproveClick(interaction, parts[2], client);
+      if (action === 'deny')      return void await handleDenyClick(interaction, parts[2]);
+      if (action === 'joinguest') return void await handleJoinGuestClick(interaction, parts[2]);
+      if (action === 'cancel')    return void await handleCancelClick(interaction);
     }
     if (interaction.isStringSelectMenu()) {
       if (action === 'pickchar') return void await handlePickChar(interaction, parts[2]);
       if (action === 'pickdrop') return void await handlePickDrop(interaction, parts[2], client);
-      if (action === 'ticket') return void await handleTicketPick(interaction, parts[2], client);
+      if (action === 'ticket')   return void await handleTicketPick(interaction, parts[2], client);
+      if (action === 'gclass')   return void await handleGuestClassPick(interaction, parts[2]);
+      if (action === 'gsubclass')return void await handleGuestSubclassPick(interaction, parts[2]);
+      if (action === 'gfinal')   return void await handleGuestFinalClassPick(interaction, parts[2]);
+      if (action === 'guesttkt') return void await handleGuestTicketPick(interaction, parts[2]);
+    }
+    if (interaction.isModalSubmit()) {
+      if (action === 'guestmodal') return void await handleGuestNameModalSubmit(interaction, parts[2]);
     }
     return true;
   } catch (err) {
@@ -162,16 +188,194 @@ async function handle(interaction, client) {
 
 async function handleJoinClick(interaction, lineupId) {
   const characters = await getCharactersOwnedBy(interaction.user.id);
+  const lineup = await getLineupWithPlayers(lineupId);
+  const eligible = characters.filter(c => isCharacterEligible(c, lineup.raid_type));
 
-  if (characters.length === 0) {
-    return await postApprovalRequest(interaction, lineupId, null, false, 'unregistered user');
+  // Nothing eligible → offer the unregistered/guest path with the right copy.
+  if (eligible.length === 0) {
+    const haveDoneChars = characters.length > 0;
+    return await showUnregisteredPrompt(interaction, lineupId, haveDoneChars);
   }
 
-  if (characters.length === 1) {
-    return await proceedAfterChar(interaction, lineupId, characters[0]);
+  if (eligible.length === 1) {
+    return await proceedAfterChar(interaction, lineupId, eligible[0]);
   }
 
-  return await showCharacterPicker(interaction, lineupId, characters);
+  return await showCharacterPicker(interaction, lineupId, eligible);
+}
+
+// === Unregistered / "joining on a different character" prompt ===
+
+async function showUnregisteredPrompt(interaction, lineupId, haveDoneChars) {
+  const yesBtn = new ButtonBuilder()
+    .setCustomId(`signup:joinguest:${lineupId}`)
+    .setLabel('Yes — joining on another character')
+    .setStyle(ButtonStyle.Primary);
+  const noBtn = new ButtonBuilder()
+    .setCustomId(`signup:cancel`)
+    .setLabel('No, never mind')
+    .setStyle(ButtonStyle.Secondary);
+
+  const intro = haveDoneChars
+    ? 'Your registered characters are already done for the week.'
+    : "You don't have a registered character.";
+
+  await respondTo(interaction, {
+    content: `${intro}\n\nAre you joining on a character not registered?`,
+    components: [new ActionRowBuilder().addComponents(yesBtn, noBtn)],
+  });
+}
+
+async function handleCancelClick(interaction) {
+  await respondTo(interaction, { content: 'Okay — no action taken.', components: [] });
+}
+
+// Yes button → open a modal asking for the character name.
+async function handleJoinGuestClick(interaction, lineupId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`signup:guestmodal:${lineupId}`)
+    .setTitle('Character name');
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId('charname')
+    .setLabel('What\'s the character name?')
+    .setStyle(TextInputStyle.Short)
+    .setMinLength(1)
+    .setMaxLength(32)
+    .setRequired(true);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+  await interaction.showModal(modal);
+}
+
+async function handleGuestNameModalSubmit(interaction, lineupId) {
+  const characterName = interaction.fields.getTextInputValue('charname').trim();
+  if (!characterName) {
+    return await interaction.reply({ content: 'Character name is required.', ephemeral: true });
+  }
+
+  // Stash the in-progress guest application — class picks update this.
+  const requestId = makeRequestId();
+  setStash(requestId, {
+    lineupId,
+    discordId: interaction.user.id,
+    characterName,
+    familyKey: null,
+    specKey: null,
+    finalClass: null,
+    usesTicket: false,
+  });
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`signup:gclass:${requestId}`)
+    .setPlaceholder('Pick your class family')
+    .addOptions(getFamilyOptions());
+
+  await interaction.reply({
+    content: `**${characterName}** — Step 1 of 3: class family`,
+    components: [new ActionRowBuilder().addComponents(select)],
+    ephemeral: true,
+  });
+}
+
+function ensureRequestOwner(stashData, interaction) {
+  if (!stashData) return 'expired';
+  if (stashData.discordId !== interaction.user.id) return 'wrong-user';
+  return 'ok';
+}
+
+async function handleGuestClassPick(interaction, requestId) {
+  const data = stash.get(requestId);
+  const status = ensureRequestOwner(data, interaction);
+  if (status === 'expired') return await respondTo(interaction, { content: 'This prompt expired. Click Join again.', components: [] });
+  if (status === 'wrong-user') return await interaction.reply({ content: "That prompt isn't for you.", ephemeral: true });
+
+  const familyKey = interaction.values[0];
+  const fam = CLASS_FAMILIES[familyKey];
+  if (!fam) return await respondTo(interaction, { content: 'Unknown class family.', components: [] });
+
+  data.familyKey = familyKey;
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`signup:gsubclass:${requestId}`)
+    .setPlaceholder('Pick your specialization')
+    .addOptions(getSpecOptions(familyKey));
+
+  await respondTo(interaction, {
+    content: `**${data.characterName}** — Step 2 of 3: ${fam.name} → specialization`,
+    components: [new ActionRowBuilder().addComponents(select)],
+  });
+}
+
+async function handleGuestSubclassPick(interaction, requestId) {
+  const data = stash.get(requestId);
+  const status = ensureRequestOwner(data, interaction);
+  if (status === 'expired') return await respondTo(interaction, { content: 'This prompt expired. Click Join again.', components: [] });
+  if (status === 'wrong-user') return await interaction.reply({ content: "That prompt isn't for you.", ephemeral: true });
+
+  const specKey = interaction.values[0];
+  const spec = CLASS_FAMILIES[data.familyKey]?.specializations?.[specKey];
+  if (!spec) return await respondTo(interaction, { content: 'Unknown specialization.', components: [] });
+
+  data.specKey = specKey;
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`signup:gfinal:${requestId}`)
+    .setPlaceholder('Pick your final class')
+    .addOptions(getFinalClassOptions(data.familyKey, specKey));
+
+  await respondTo(interaction, {
+    content: `**${data.characterName}** — Step 3 of 3: ${spec.name} → final class`,
+    components: [new ActionRowBuilder().addComponents(select)],
+  });
+}
+
+async function handleGuestFinalClassPick(interaction, requestId) {
+  const data = stash.get(requestId);
+  const status = ensureRequestOwner(data, interaction);
+  if (status === 'expired') return await respondTo(interaction, { content: 'This prompt expired. Click Join again.', components: [] });
+  if (status === 'wrong-user') return await interaction.reply({ content: "That prompt isn't for you.", ephemeral: true });
+
+  const finalClass = interaction.values[0];
+  const valid = getFinalClassOptions(data.familyKey, data.specKey).map(o => o.value);
+  if (!valid.includes(finalClass)) return await respondTo(interaction, { content: 'Unknown class.', components: [] });
+
+  data.finalClass = finalClass;
+
+  const lineup = await getLineupWithPlayers(data.lineupId);
+  if (lineup.raid_type === 'Classic') {
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(`signup:guesttkt:${requestId}`)
+      .setPlaceholder('Pania ticket?')
+      .addOptions(
+        { label: 'Yes', value: 'yes', description: 'Use a Pania ticket for this clear' },
+        { label: 'No', value: 'no' },
+      );
+    return await respondTo(interaction, {
+      content: `**${data.characterName}** (${finalClass}) — Pania ticket?`,
+      components: [new ActionRowBuilder().addComponents(select)],
+    });
+  }
+  return await submitGuestApproval(interaction, requestId);
+}
+
+async function handleGuestTicketPick(interaction, requestId) {
+  const data = stash.get(requestId);
+  const status = ensureRequestOwner(data, interaction);
+  if (status === 'expired') return await respondTo(interaction, { content: 'This prompt expired. Click Join again.', components: [] });
+  if (status === 'wrong-user') return await interaction.reply({ content: "That prompt isn't for you.", ephemeral: true });
+
+  data.usesTicket = interaction.values[0] === 'yes';
+  return await submitGuestApproval(interaction, requestId);
+}
+
+async function submitGuestApproval(interaction, requestId) {
+  const data = stash.get(requestId);
+  if (!data) return await respondTo(interaction, { content: 'This prompt expired. Click Join again.', components: [] });
+  stash.delete(requestId);
+  return await postApprovalRequest(interaction, data.lineupId, /*character*/ null, data.usesTicket, 'unregistered character', {
+    guest: { name: data.characterName, finalClass: data.finalClass },
+  });
 }
 
 async function showCharacterPicker(interaction, lineupId, characters) {
@@ -327,7 +531,8 @@ async function evaluateAndAct(interaction, lineup, character, usesTicket) {
 
 // === Approval flow ===
 
-async function postApprovalRequest(interaction, lineupId, character, usesTicket, reason) {
+async function postApprovalRequest(interaction, lineupId, character, usesTicket, reason, opts = {}) {
+  const guest = opts.guest || null;
   const requestId = makeRequestId();
   setStash(requestId, {
     lineupId,
@@ -335,6 +540,7 @@ async function postApprovalRequest(interaction, lineupId, character, usesTicket,
     playerId: character?.id || null,
     usesTicket: !!usesTicket,
     requesterId: interaction.user.id,
+    guest, // { name, finalClass } or null
   });
 
   const approveBtn = new ButtonBuilder()
@@ -346,12 +552,17 @@ async function postApprovalRequest(interaction, lineupId, character, usesTicket,
     .setLabel('Deny')
     .setStyle(ButtonStyle.Danger);
 
-  const charLine = character
-    ? `Character: **${character.name}**${usesTicket ? ' — Pania ticket 🎟️' : ''}`
-    : 'Character: _none registered_';
+  let charLine;
+  if (character) {
+    charLine = `Character: **${character.name}**${usesTicket ? ' — Pania ticket 🎟️' : ''}`;
+  } else if (guest) {
+    charLine = `Guest: **${guest.name}** (${guest.finalClass})${usesTicket ? ' — Pania ticket 🎟️' : ''}`;
+  } else {
+    charLine = 'Character: _none registered_';
+  }
 
   const content = [
-    `🛂 **Sign-up needs admin review** — <@${interaction.user.id}>`,
+    `🛂 **Applying to join party** — <@${interaction.user.id}>`,
     charLine,
     `Reason: ${reason}`,
   ].join('\n');
@@ -390,14 +601,7 @@ async function handleApproveClick(interaction, requestId, client) {
     });
   }
 
-  if (!data.playerName || !data.playerId) {
-    stash.delete(requestId);
-    return await respondTo(interaction, {
-      content: `${interaction.message.content}\n\n❌ **Cannot approve** — no registered character. Have them add one on the web app first.`,
-      components: [],
-    });
-  }
-
+  // Determine what we're inserting: a registered character row or a guest.
   const lineup = await getLineupWithPlayers(data.lineupId);
   const slot = nextEmptySlot(lineup);
   if (slot === null) {
@@ -406,19 +610,35 @@ async function handleApproveClick(interaction, requestId, client) {
       components: [],
     });
   }
-  const already = (lineup.lineup_players || []).some(lp => lp.player_name === data.playerName);
-  if (already) {
+
+  let insertedAs;
+  if (data.guest) {
+    // Guest format mirrors the web app: [PUB]Name|Class
+    const playerName = `[PUB]${data.guest.name}|${data.guest.finalClass}`;
+    await insertLineupPlayer(data.lineupId, slot, playerName, null, data.usesTicket);
+    insertedAs = `${data.guest.name} (${data.guest.finalClass}, guest)`;
+  } else if (data.playerName && data.playerId) {
+    const already = (lineup.lineup_players || []).some(lp => lp.player_name === data.playerName);
+    if (already) {
+      stash.delete(requestId);
+      return await respondTo(interaction, {
+        content: `${interaction.message.content}\n\n⚠️ **Already in lineup** — no action taken.`,
+        components: [],
+      });
+    }
+    await insertLineupPlayer(data.lineupId, slot, data.playerName, data.playerId, data.usesTicket);
+    insertedAs = data.playerName;
+  } else {
     stash.delete(requestId);
     return await respondTo(interaction, {
-      content: `${interaction.message.content}\n\n⚠️ **Already in lineup** — no action taken.`,
+      content: `${interaction.message.content}\n\n❌ **Cannot approve** — request has no character or guest info.`,
       components: [],
     });
   }
 
-  await insertLineupPlayer(data.lineupId, slot, data.playerName, data.playerId, data.usesTicket);
   stash.delete(requestId);
   await respondTo(interaction, {
-    content: `${interaction.message.content}\n\n✅ **Approved by <@${interaction.user.id}>** — added to slot ${slot}.`,
+    content: `${interaction.message.content}\n\n✅ **Approved by <@${interaction.user.id}>** — added **${insertedAs}** to slot ${slot}.`,
     components: [],
   });
   await refreshThread(client, data.lineupId);

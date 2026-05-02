@@ -43,8 +43,8 @@ client.once('ready', () => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-  // Lineup sign-up buttons + select menus
-  if (interaction.isButton() || interaction.isStringSelectMenu()) {
+  // Lineup sign-up: buttons, select menus, and the guest-name modal
+  if (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) {
     if (interaction.customId?.startsWith('signup:')) {
       await signupHandler.handle(interaction, client);
     }
