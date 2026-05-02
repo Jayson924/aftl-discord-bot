@@ -200,10 +200,8 @@ async function handleJoinClick(interaction, lineupId) {
     return await showUnregisteredPrompt(interaction, lineupId, haveDoneChars);
   }
 
-  if (eligible.length === 1) {
-    return await proceedAfterChar(interaction, lineupId, eligible[0]);
-  }
-
+  // Always show the picker when the user has any characters — gives them the
+  // "Add a different character" escape hatch even when only 1 is eligible.
   return await showCharacterPicker(interaction, lineupId, eligible);
 }
 
@@ -382,14 +380,22 @@ async function submitGuestApproval(interaction, requestId) {
   });
 }
 
+// Sentinel value used in the character picker for "use a different character"
+const GUEST_OPTION_VALUE = '__guest__';
+
 async function showCharacterPicker(interaction, lineupId, characters) {
-  const options = characters.slice(0, 25).map(c => {
+  const options = characters.slice(0, 24).map(c => {
     const opt = { label: c.name, value: c.name };
     const bits = [];
     if (c.account_number) bits.push(`Account ${c.account_number}`);
     if (c.exclude) bits.push('excluded');
     if (bits.length > 0) opt.description = bits.join(' · ');
     return opt;
+  });
+  options.push({
+    label: 'Sign up on a new character',
+    value: GUEST_OPTION_VALUE,
+    emoji: '➕',
   });
 
   const select = new StringSelectMenuBuilder()
@@ -404,9 +410,27 @@ async function showCharacterPicker(interaction, lineupId, characters) {
 }
 
 async function handlePickChar(interaction, lineupId) {
-  const playerName = interaction.values[0];
+  const value = interaction.values[0];
+
+  // "Add a different character" → open the guest name modal. Modal submit
+  // will update() this ephemeral in place so the picker disappears.
+  if (value === GUEST_OPTION_VALUE) {
+    const modal = new ModalBuilder()
+      .setCustomId(`signup:guestmodal:${lineupId}`)
+      .setTitle('Character name');
+    const nameInput = new TextInputBuilder()
+      .setCustomId('charname')
+      .setLabel('What\'s the character name?')
+      .setStyle(TextInputStyle.Short)
+      .setMinLength(1)
+      .setMaxLength(32)
+      .setRequired(true);
+    modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+    return await interaction.showModal(modal);
+  }
+
   const characters = await getCharactersOwnedBy(interaction.user.id);
-  const character = characters.find(c => c.name === playerName);
+  const character = characters.find(c => c.name === value);
   if (!character) {
     return await respondTo(interaction, { content: 'Character not found.', components: [] });
   }
