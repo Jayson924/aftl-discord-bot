@@ -1,6 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const supabase = require('../supabase');
 const { formatMention } = require('./lineupMentions');
+const { buildSignupRow } = require('./createRaidThread');
 
 const GUILD_TIMEZONE = 'Asia/Singapore'; // GMT+8 — keep in sync with createRaidThread.js
 
@@ -261,8 +262,9 @@ async function updateRaidThread({ client, lineupId }) {
       .eq('id', lineup.id);
   }
 
-  // Always edit the embed — cheap and idempotent
-  await embedMessage.edit({ embeds: [view.embed] });
+  // Always edit the embed — cheap and idempotent. Re-attach signup buttons so
+  // they survive every update (Discord clears components if not provided).
+  await embedMessage.edit({ embeds: [view.embed], components: [buildSignupRow(lineup.id)] });
 
   // Rename the thread if the title would have changed
   if (thread.name !== view.threadName) {

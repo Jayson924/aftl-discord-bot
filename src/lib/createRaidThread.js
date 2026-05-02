@@ -1,4 +1,4 @@
-const { EmbedBuilder, ChannelType } = require('discord.js');
+const { EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 
@@ -177,10 +177,12 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   let thread;
   let embedMessage;
 
+  const signupRow = buildSignupRow(lineup.id);
+
   if (isForum) {
     thread = await channel.threads.create({
       name: threadName,
-      message: { embeds: [embed] },
+      message: { embeds: [embed], components: [signupRow] },
       appliedTags,
       reason: `Raid thread for ${lineup.name}`,
     });
@@ -192,7 +194,7 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
       type: ChannelType.PublicThread,
       reason: `Raid thread for ${lineup.name}`,
     });
-    embedMessage = await thread.send({ embeds: [embed] });
+    embedMessage = await thread.send({ embeds: [embed], components: [signupRow] });
   }
 
   // Ping players in the thread — show each mention alongside their character(s)
@@ -216,4 +218,21 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   return { thread, lineup };
 }
 
-module.exports = { createRaidThread, formatShortTime };
+/**
+ * Build the Join / Drop ActionRow attached to a lineup embed.
+ * Exported so updateRaidThread can re-attach the same buttons after edits.
+ */
+function buildSignupRow(lineupId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`signup:join:${lineupId}`)
+      .setLabel('Join')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`signup:drop:${lineupId}`)
+      .setLabel('Drop')
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
+module.exports = { createRaidThread, formatShortTime, buildSignupRow };

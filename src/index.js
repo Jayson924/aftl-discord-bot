@@ -4,6 +4,7 @@ const path = require('node:path');
 require('dotenv').config();
 const { startThreadRequestHandler } = require('./lib/threadRequestHandler');
 const { startReminderScheduler } = require('./lib/reminderScheduler');
+const signupHandler = require('./lib/signupHandler');
 
 const client = new Client({
   intents: [
@@ -42,6 +43,14 @@ client.once('ready', () => {
 });
 
 client.on('interactionCreate', async (interaction) => {
+  // Lineup sign-up buttons + select menus
+  if (interaction.isButton() || interaction.isStringSelectMenu()) {
+    if (interaction.customId?.startsWith('signup:')) {
+      await signupHandler.handle(interaction, client);
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
