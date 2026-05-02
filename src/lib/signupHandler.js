@@ -127,6 +127,9 @@ async function refreshThread(client, lineupId) {
 // with a fresh ephemeral instead.
 function isUpdateableContext(interaction) {
   if (interaction.isStringSelectMenu()) return true;
+  // Modal submit triggered from a message component can update that message —
+  // we use this to dismiss the Yes/No prompt the moment the name modal submits.
+  if (interaction.isModalSubmit() && interaction.message) return true;
   if (interaction.isButton()) {
     return interaction.customId.startsWith('signup:approve:')
         || interaction.customId.startsWith('signup:deny:');
@@ -271,10 +274,11 @@ async function handleGuestNameModalSubmit(interaction, lineupId) {
     .setPlaceholder('Pick your class family')
     .addOptions(getFamilyOptions());
 
-  await interaction.reply({
+  // respondTo will call update() on the Yes/No ephemeral, replacing it
+  // in-place with the class picker — old buttons gone, no double-submit.
+  await respondTo(interaction, {
     content: `**${characterName}** — Step 1 of 3: class family`,
     components: [new ActionRowBuilder().addComponents(select)],
-    ephemeral: true,
   });
 }
 
@@ -484,16 +488,21 @@ async function evaluateAndAct(interaction, lineup, character, usesTicket) {
     });
   }
 
-  // Decide: auto-add or send for approval
-  const reasons = [];
-  if (!appUser || appUser.role !== 'guildmate') {
-    reasons.push(appUser?.role === 'admin' ? null : 'not a guildmate');
+  // Decide: auto-add or send for approval. Track gates separately from
+  // displayed reasons — exclude triggers approval but isn't shown (the label
+  // alone often isn't enough context, so we'd rather list nothing).
+  const gates = [];
+  const displayReasons = [];
+
+  if (!appUser || (appUser.role !== 'guildmate' && appUser.role !== 'admin')) {
+    gates.push('non-guildmate');
+    displayReasons.push('not a guildmate');
   }
   if (appUser?.exclude) {
-    reasons.push(`user excluded${appUser.exclude_label ? ` (${appUser.exclude_label})` : ''}`);
+    gates.push('user-excluded');
   }
   if (character.exclude) {
-    reasons.push(`character excluded${character.exclude_label ? ` (${character.exclude_label})` : ''}`);
+    gates.push('character-excluded');
   }
 
   // Account conflict — port of getAccountConflicts() from lineup-editor.jsx
@@ -506,17 +515,17 @@ async function evaluateAndAct(interaction, lineup, character, usesTicket) {
     allInLineup,
   );
   if (conflict.conflicts) {
-    reasons.push(`same-account conflict with ${conflict.withName}`);
+    gates.push('account-conflict');
+    displayReasons.push(`same-account conflict with ${conflict.withName}`);
   }
 
-  const blocking = reasons.filter(Boolean);
-  if (blocking.length > 0) {
+  if (gates.length > 0) {
     return await postApprovalRequest(
       interaction,
       lineup.id,
       character,
       usesTicket,
-      blocking.join('; '),
+      displayReasons.length > 0 ? displayReasons.join('; ') : null,
     );
   }
 
@@ -561,11 +570,12 @@ async function postApprovalRequest(interaction, lineupId, character, usesTicket,
     charLine = 'Character: _none registered_';
   }
 
-  const content = [
+  const lines = [
     `🛂 **Applying to join party** — <@${interaction.user.id}>`,
     charLine,
-    `Reason: ${reason}`,
-  ].join('\n');
+  ];
+  if (reason) lines.push(`Reason: ${reason}`);
+  const content = lines.join('\n');
 
   const channel = interaction.channel;
   if (!channel) {
