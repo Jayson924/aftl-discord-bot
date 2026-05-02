@@ -1,4 +1,5 @@
 const supabase = require('../supabase');
+const { getClassEmojiTag } = require('./classEmojis');
 
 /**
  * Fetch mention info for all players in a lineup.
@@ -22,38 +23,49 @@ async function getLineupMentions(lineupId) {
 
   const { data: players, error: pError } = await supabase
     .from('players')
-    .select('name, discord_id')
+    .select('name, discord_id, role')
     .in('name', names);
 
   if (pError || !players) return [];
 
-  // Build name → discord_id map
-  const nameToId = new Map();
+  // Build name → { discord_id, role } map
+  const nameToInfo = new Map();
   for (const p of players) {
-    if (p.discord_id) nameToId.set(p.name, p.discord_id);
+    if (p.discord_id) nameToInfo.set(p.name, { discordId: p.discord_id, role: p.role || null });
   }
 
   // Group by discord_id, preserving slot order for character names
   const idToChars = new Map();
   for (const lp of lineupPlayers) {
-    const discordId = nameToId.get(lp.player_name);
-    if (!discordId) continue;
-    if (!idToChars.has(discordId)) idToChars.set(discordId, []);
-    idToChars.get(discordId).push(lp.player_name);
+    const info = nameToInfo.get(lp.player_name);
+    if (!info) continue;
+    if (!idToChars.has(info.discordId)) idToChars.set(info.discordId, []);
+    idToChars.get(info.discordId).push({ name: lp.player_name, role: info.role });
   }
 
-  return [...idToChars.entries()].map(([discordId, characterNames]) => ({
+  return [...idToChars.entries()].map(([discordId, characters]) => ({
     discordId,
-    characterNames,
+    characterNames: characters.map(c => c.name), // legacy field, kept for callers
+    characters,
   }));
 }
 
 /**
- * Format a mention group as "<@id> (Char1, Char2)".
+ * Format a mention group as "<@id> (<:Class:id> Char1, <:Class:id> Char2)".
+ * Falls back to plain names when no class emoji is configured.
  */
-function formatMention({ discordId, characterNames }) {
-  const chars = characterNames.join(', ');
-  return chars ? `<@${discordId}> (${chars})` : `<@${discordId}>`;
+function formatMention({ discordId, characterNames, characters }) {
+  // Prefer the richer `characters` shape when present (has class info for emoji)
+  const list = characters && characters.length > 0
+    ? characters
+    : (characterNames || []).map(name => ({ name, role: null }));
+
+  const labelled = list.map(({ name, role }) => {
+    const emoji = role ? getClassEmojiTag(role) : '';
+    return emoji ? `${emoji} ${name}` : name;
+  }).join(', ');
+
+  return labelled ? `<@${discordId}> (${labelled})` : `<@${discordId}>`;
 }
 
 /**
