@@ -32,14 +32,14 @@ const TIMED_ROASTS = [
   "Update: {user} is {minutes} minutes into a League session. The jungler is already AFK.",
   "{user}: {minutes} minutes in. How's the team comp treating you?",
   "{minutes} minutes in League and {user}'s blood pressure is climbing.",
-  "Your character will probably be stronger if you spent {minutes} minutes in Dragon Nest instead of League."
+  "{user}'s character will probably be stronger if you spent {minutes} minutes in Dragon Nest instead of League."
 ];
 
 // Roasts that work regardless of timing
 const GENERIC_ROASTS = [
-  "Imagine having hobbies and choosing League of Legends.",
-  "Still playing League in {year}? Couldn't be me.",
-  "League of Legends? More like League of No Bitches.",
+  "Imagine being {user} and choosing League of Legends out of all the games available to play.",
+  "{user} still playing League in {year}? Gross.",
+  "League of Legends? More like League of No Bitches. {user}",
   "POV: {user} chose violence (against their own mental health) by playing League.",
   "Touch grass? Nah, {user} chose to touch Summoner's Rift instead.",
   "{user} chose League. Of all the games. Of all the ways to spend an evening.",
