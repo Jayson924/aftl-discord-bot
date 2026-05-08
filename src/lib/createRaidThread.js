@@ -2,6 +2,7 @@ const { EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle 
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 const { getClassEmojiTag } = require('./classEmojis');
+const { getLineupSize, getRaidColor } = require('./raidTypes');
 
 // Guild timezone — raid times are displayed here in thread titles
 const GUILD_TIMEZONE = 'Asia/Singapore'; // GMT+8
@@ -106,7 +107,7 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   }
 
   // Build roster — show character name first, then mention so people can tell which char is theirs
-  const lineupSize = lineup.raid_type === '4-man' ? 4 : 8;
+  const lineupSize = getLineupSize(lineup.raid_type);
   const slots = Array(lineupSize).fill('_empty_');
   (lineup.lineup_players || [])
     .sort((a, b) => a.slot_position - b.slot_position)
@@ -173,7 +174,7 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     .setTitle(`${lineup.name} — ${lineup.raid_type}`)
     .setDescription(roster)
     .addFields(embedFields)
-    .setColor(lineup.raid_type === 'Hardcore' ? 0xe74c3c : 0x3498db);
+    .setColor(getRaidColor(lineup.raid_type));
 
   // Build thread name — append short time if the lineup has a scheduled raid time
   const shortTime = lineup.raid_time ? formatShortTime(lineup.raid_time) : null;

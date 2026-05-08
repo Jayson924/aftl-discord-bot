@@ -1,22 +1,23 @@
 const { Events, EmbedBuilder } = require('discord.js');
 const supabase = require('../supabase');
+const { getLineupSize, getRaidColor } = require('../lib/raidTypes');
 
 function parseMessage(text) {
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
 
   let raidType = null;
-  // Check 4-man first so '4-man hardcore' (etc.) doesn't mismatch on 'hc'
-  if (lower.includes('4-man') || lower.includes('4man')) raidType = '4-man';
+  // Match DDN variants first — they share substrings ("classic", "hc") with
+  // GDN raid names so the more specific check has to win.
+  if (/\bddn\s*(normal|n)\b/.test(lower)) raidType = 'DDN Normal';
+  else if (/\bddn\s*(hardcore|hc)\b/.test(lower)) raidType = 'DDN Hardcore';
+  else if (/\bddn\s*(classic|cl)?\b/.test(lower)) raidType = 'DDN Classic';
+  // Then 4-man (so '4-man hardcore' doesn't fall through to Hardcore on 'hc')
+  else if (lower.includes('4-man') || lower.includes('4man')) raidType = '4-man';
   else if (lower.includes('hardcore') || lower.includes('hc')) raidType = 'Hardcore';
   else if (lower.includes('classic')) raidType = 'Classic';
 
   return { raidType, lineupName: trimmed || null };
-}
-
-// Returns the number of lineup slots for a given raid type
-function getLineupSize(raidType) {
-  return raidType === '4-man' ? 4 : 8;
 }
 
 async function analyzeScreenshot(buffer, mimeType, knownNames) {
@@ -199,7 +200,7 @@ async function processScreenshot(message, attachment, raidType, lineupName) {
     const embed = new EmbedBuilder()
       .setTitle(`${raidType} Raid`)
       .setDescription(roster)
-      .setColor(raidType === 'Hardcore' ? 0xe74c3c : 0x3498db)
+      .setColor(getRaidColor(raidType))
       .setImage(attachment.url);
 
     if (savedLineup) {

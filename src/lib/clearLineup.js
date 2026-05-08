@@ -2,6 +2,7 @@ const { EmbedBuilder, ChannelType } = require('discord.js');
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 const { formatShortTime } = require('./createRaidThread');
+const { getCompletionColumn, getRaidColor, usesTickets } = require('./raidTypes');
 
 const COMPLETED_TAG_NAME = process.env.RAID_COMPLETED_TAG_NAME || 'Cleared';
 
@@ -27,13 +28,15 @@ async function applyCompletedTag(thread) {
  * Mark each player in the lineup as having completed this week's raid.
  * Mirrors data.js#markPlayersCompleted on the web app.
  *
- * - Hardcore: sets `hardcore_completed = now()`
- * - Classic:  sets `classic_completed = now()`, and `classic_ticket_used = now()`
- *             for any lineup_player with `uses_ticket = true`
- * - 4-man / Unspecified: skipped (no weekly tracking)
+ * Sets the per-raid_type completion column on every player in the lineup.
+ * Tickets only apply to GDN Classic — sets `classic_ticket_used = now()`
+ * for any lineup_player with `uses_ticket = true`.
+ *
+ * Raid types with no completion column (4-man, Unspecified) are skipped.
  */
 async function markPlayersCompletedForLineup(lineup) {
-  if (lineup.raid_type !== 'Hardcore' && lineup.raid_type !== 'Classic') {
+  const column = getCompletionColumn(lineup.raid_type);
+  if (!column) {
     return { updated: 0, ticketUpdated: 0 };
   }
 
@@ -51,7 +54,6 @@ async function markPlayersCompletedForLineup(lineup) {
     .filter(lp => !lp.player_id && lp.player_name)
     .map(lp => lp.player_name);
 
-  const column = lineup.raid_type === 'Hardcore' ? 'hardcore_completed' : 'classic_completed';
   const now = new Date().toISOString();
 
   let updated = 0;
@@ -73,7 +75,7 @@ async function markPlayersCompletedForLineup(lineup) {
   }
 
   let ticketUpdated = 0;
-  if (lineup.raid_type === 'Classic') {
+  if (usesTickets(lineup.raid_type)) {
     const ticketIds = lineupPlayers.filter(lp => lp.uses_ticket && lp.player_id).map(lp => lp.player_id);
     const ticketNames = lineupPlayers
       .filter(lp => lp.uses_ticket && !lp.player_id && lp.player_name)
@@ -137,7 +139,7 @@ async function createLootThread(lineup, raidThread) {
     .setTitle(`${lineup.name} — Loot`)
     .setDescription(roster || '_no players_')
     .addFields({ name: 'Raid thread', value: `<#${raidThread.id}>`, inline: true })
-    .setColor(lineup.raid_type === 'Hardcore' ? 0xe74c3c : 0x3498db);
+    .setColor(getRaidColor(lineup.raid_type));
 
   // Match the raid thread naming so paired raid + loot threads are easy to spot:
   //   "<raid_type> <name>"  optionally suffixed with " - <shortTime>"

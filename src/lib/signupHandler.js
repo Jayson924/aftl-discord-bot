@@ -13,6 +13,12 @@ const { wouldConflict } = require('./accountConflicts');
 const { updateRaidThread } = require('./updateRaidThread');
 const { getFamilyOptions, getSpecOptions, getFinalClassOptions, CLASS_FAMILIES } = require('./classData');
 const { getClassEmojiTag } = require('./classEmojis');
+const {
+  ALL_COMPLETION_COLUMNS,
+  getLineupSize,
+  isCharacterEligible,
+  usesTickets,
+} = require('./raidTypes');
 
 // In-memory stash for multi-step request state. Keyed by short request id.
 // Lost on bot restart — acceptable for v1: pending approvals are short-lived.
@@ -41,25 +47,14 @@ async function getLineupWithPlayers(lineupId) {
 }
 
 async function getCharactersOwnedBy(discordId) {
+  const baseColumns = ['id', 'name', 'role', 'discord_id', 'account_number', 'exclude', 'exclude_label', 'classic_ticket_used'];
+  const select = [...baseColumns, ...ALL_COMPLETION_COLUMNS].join(', ');
   const { data, error } = await supabase
     .from('players')
-    .select('id, name, role, discord_id, account_number, exclude, exclude_label, hardcore_completed, classic_completed, classic_ticket_used')
+    .select(select)
     .eq('discord_id', discordId);
   if (error) throw error;
   return data || [];
-}
-
-// A character is eligible for a raid_type if they still have a clear available
-// this week. Weekly cleanup nulls these timestamps every Friday 5pm PT, so
-// "non-null" == "already cleared this week".
-function isCharacterEligible(character, raidType) {
-  if (raidType === 'Hardcore') return !character.hardcore_completed;
-  if (raidType === 'Classic') {
-    // Classic gives 1 base clear + 1 ticket clear per week — eligible if either is unused.
-    return !character.classic_completed || !character.classic_ticket_used;
-  }
-  // 4-man / unknown — no completion model wired in, treat as always eligible.
-  return true;
 }
 
 async function getPlayersByName(names) {
@@ -83,7 +78,7 @@ async function getAppUser(discordId) {
 }
 
 function nextEmptySlot(lineup) {
-  const lineupSize = lineup.raid_type === '4-man' ? 4 : 8;
+  const lineupSize = getLineupSize(lineup.raid_type);
   const taken = new Set((lineup.lineup_players || []).map(lp => lp.slot_position));
   for (let i = 1; i <= lineupSize; i++) {
     if (!taken.has(i)) return i;
@@ -346,7 +341,7 @@ async function handleGuestFinalClassPick(interaction, requestId) {
   data.finalClass = finalClass;
 
   const lineup = await getLineupWithPlayers(data.lineupId);
-  if (lineup.raid_type === 'Classic') {
+  if (usesTickets(lineup.raid_type)) {
     const select = new StringSelectMenuBuilder()
       .setCustomId(`signup:guesttkt:${requestId}`)
       .setPlaceholder('Pania ticket?')
@@ -440,7 +435,7 @@ async function handlePickChar(interaction, lineupId) {
 
 async function proceedAfterChar(interaction, lineupId, character) {
   const lineup = await getLineupWithPlayers(lineupId);
-  if (lineup.raid_type === 'Classic') {
+  if (usesTickets(lineup.raid_type)) {
     return await showTicketPicker(interaction, lineup, character);
   }
   return await evaluateAndAct(interaction, lineup, character, false);

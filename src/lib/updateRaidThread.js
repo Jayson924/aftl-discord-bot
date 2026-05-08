@@ -3,6 +3,7 @@ const supabase = require('../supabase');
 const { formatMention } = require('./lineupMentions');
 const { buildSignupRow } = require('./createRaidThread');
 const { getClassEmojiTag } = require('./classEmojis');
+const { getLineupSize, getRaidColor } = require('./raidTypes');
 
 const GUILD_TIMEZONE = 'Asia/Singapore'; // GMT+8 — keep in sync with createRaidThread.js
 
@@ -52,7 +53,7 @@ async function buildLineupView(lineup) {
     }
   }
 
-  const lineupSize = lineup.raid_type === '4-man' ? 4 : 8;
+  const lineupSize = getLineupSize(lineup.raid_type);
   const slots = Array(lineupSize).fill('_empty_');
   // Display names per slot (cleaned of [PUB]...|... wrappers) — used for
   // diffing against the embed since the embed contains the cleaned form.
@@ -118,7 +119,7 @@ async function buildLineupView(lineup) {
     .setTitle(`${lineup.name} — ${lineup.raid_type}`)
     .setDescription(roster)
     .addFields(embedFields)
-    .setColor(lineup.raid_type === 'Hardcore' ? 0xe74c3c : 0x3498db);
+    .setColor(getRaidColor(lineup.raid_type));
 
   const shortTime = lineup.raid_time ? formatShortTime(lineup.raid_time) : null;
   let threadName = `${lineup.raid_type} ${lineup.name}`;

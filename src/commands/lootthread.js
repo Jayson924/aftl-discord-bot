@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, ChannelType } = require('discord.js');
 const supabase = require('../supabase');
+const { RAID_TYPE_CHOICES, getRaidColor } = require('../lib/raidTypes');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -10,11 +11,7 @@ module.exports = {
         .setName('type')
         .setDescription('Raid type')
         .setRequired(true)
-        .addChoices(
-          { name: 'Hardcore', value: 'Hardcore' },
-          { name: 'Classic', value: 'Classic' },
-          { name: '4-Man', value: '4-man' },
-        ),
+        .addChoices(...RAID_TYPE_CHOICES),
     )
     .addAttachmentOption(option =>
       option
@@ -219,7 +216,7 @@ Rules:
     const embed = new EmbedBuilder()
       .setTitle(`${raidType} Raid`)
       .setDescription(roster)
-      .setColor(raidType === 'Hardcore' ? 0xe74c3c : 0x3498db)
+      .setColor(getRaidColor(raidType))
       .setImage(attachment.url);
 
     if (savedLineup) {

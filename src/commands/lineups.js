@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const supabase = require('../supabase');
+const { RAID_TYPE_CHOICES, getLineupSize, getRaidColor } = require('../lib/raidTypes');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -9,11 +10,7 @@ module.exports = {
       option
         .setName('type')
         .setDescription('Filter by raid type')
-        .addChoices(
-          { name: 'Hardcore', value: 'Hardcore' },
-          { name: 'Classic', value: 'Classic' },
-          { name: '4-Man', value: '4-man' },
-        ),
+        .addChoices(...RAID_TYPE_CHOICES),
     ),
 
   async execute(interaction) {
@@ -50,7 +47,7 @@ module.exports = {
     }
 
     const embeds = lineups.map(lineup => {
-      const lineupSize = lineup.raid_type === '4-man' ? 4 : 8;
+      const lineupSize = getLineupSize(lineup.raid_type);
       const players = Array(lineupSize).fill('');
       (lineup.lineup_players || [])
         .sort((a, b) => a.slot_position - b.slot_position)
@@ -77,7 +74,7 @@ module.exports = {
           { name: 'Type', value: lineup.raid_type, inline: true },
           { name: 'Status', value: lineup.completed ? 'Completed' : lineup.status, inline: true },
         )
-        .setColor(lineup.raid_type === 'Hardcore' ? 0xe74c3c : 0x3498db)
+        .setColor(getRaidColor(lineup.raid_type))
         .setFooter({ text: lineup.notes || ' ' });
     });
 
