@@ -64,6 +64,9 @@ function getRandomRoast(member, delayMinutes) {
     .replace(/\{minutes\}/g, String(delayMinutes));
 }
 
+const ROAST_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+const lastRoastAt = new Map();
+
 module.exports = {
   name: Events.PresenceUpdate,
   execute(oldPresence, newPresence) {
@@ -81,6 +84,9 @@ module.exports = {
 
     // Started playing — schedule a roast at a random delay
     if (isPlaying && !wasPlaying) {
+      const lastAt = lastRoastAt.get(memberId);
+      if (lastAt && Date.now() - lastAt < ROAST_COOLDOWN_MS) return;
+
       const member = newPresence.member;
       const guild = newPresence.guild;
       const delayMinutes = pickRandom(ROAST_DELAY_MINUTES);
@@ -102,6 +108,7 @@ module.exports = {
           const channel = await guild.channels.fetch(channelId);
           if (channel?.isTextBased()) {
             await channel.send(getRandomRoast(member, delayMinutes));
+            lastRoastAt.set(memberId, Date.now());
           }
         } catch (err) {
           console.error('Failed to send League roast:', err);
