@@ -4,6 +4,7 @@ const path = require('node:path');
 require('dotenv').config();
 const { startThreadRequestHandler } = require('./lib/threadRequestHandler');
 const { startReminderScheduler } = require('./lib/reminderScheduler');
+const { startRaidRoleScheduler } = require('./lib/raidRoleScheduler');
 const signupHandler = require('./lib/signupHandler');
 
 const client = new Client({
@@ -40,6 +41,7 @@ client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
   startThreadRequestHandler(client);
   startReminderScheduler(client);
+  startRaidRoleScheduler(client);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -47,6 +49,18 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) {
     if (interaction.customId?.startsWith('signup:')) {
       await signupHandler.handle(interaction, client);
+    }
+    return;
+  }
+
+  // Autocomplete: route to the command's autocomplete handler if it has one
+  if (interaction.isAutocomplete()) {
+    const command = client.commands.get(interaction.commandName);
+    if (!command?.autocomplete) return;
+    try {
+      await command.autocomplete(interaction);
+    } catch (error) {
+      console.error(`Autocomplete error in ${interaction.commandName}:`, error);
     }
     return;
   }

@@ -12,7 +12,7 @@ const pendingRoasts = new Map();
 const LAUNCH_ROASTS = [
   "{user} just launched League. The five stages of grief begins now.",
   "Caught {user} red-handed opening League. We see you.",
-  "{user} fired up League. Let the suffering commence 🎮",
+  "{user} fired up League. Is your mom proud of this decision?",
   "{user} booted up League like it was gonna fill the void 💀",
   "Bro really said \"I have nothing better to do\" and launched League 💀",
   "{user} opened League. There's still time to close it. Please.",
@@ -21,7 +21,7 @@ const LAUNCH_ROASTS = [
   "Looks like {user} failed a GDN run and launched League",
 ];
 
-// Roasts that fire after some playtime — must include {minutes}
+// must include {minutes}
 const TIMED_ROASTS = [
   "{minutes} minutes in League... that's {minutes} minutes of {user}'s life they're never getting back.",
   "Someone check on {user}, they've been on League for {minutes} minutes. That's a cry for help.",
