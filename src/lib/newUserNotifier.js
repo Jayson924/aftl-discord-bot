@@ -18,7 +18,7 @@ const {
 const supabase = require('../supabase');
 
 // Channel the review notifications go to. Override with NEW_USER_CHANNEL_ID.
-const DEFAULT_CHANNEL_ID = '1502370116258500688';
+const DEFAULT_CHANNEL_ID = '1513384145978523678';
 
 function getChannelId() {
   return process.env.NEW_USER_CHANNEL_ID || DEFAULT_CHANNEL_ID;
