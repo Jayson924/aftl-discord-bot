@@ -5,6 +5,7 @@ require('dotenv').config();
 const { startThreadRequestHandler } = require('./lib/threadRequestHandler');
 const { startReminderScheduler } = require('./lib/reminderScheduler');
 const { startRaidRoleScheduler } = require('./lib/raidRoleScheduler');
+const { startNewUserNotifier, handleNewUserButton } = require('./lib/newUserNotifier');
 const signupHandler = require('./lib/signupHandler');
 
 const client = new Client({
@@ -42,6 +43,7 @@ client.once('ready', () => {
   startThreadRequestHandler(client);
   startReminderScheduler(client);
   startRaidRoleScheduler(client);
+  startNewUserNotifier(client);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -49,6 +51,8 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) {
     if (interaction.customId?.startsWith('signup:')) {
       await signupHandler.handle(interaction, client);
+    } else if (interaction.customId?.startsWith('newuser:')) {
+      await handleNewUserButton(interaction);
     }
     return;
   }

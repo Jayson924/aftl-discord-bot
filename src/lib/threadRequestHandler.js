@@ -6,6 +6,15 @@ const { updateRaidThread } = require('./updateRaidThread');
 // Override with RAID_THREAD_CHANNEL_ID env var.
 const DEFAULT_RAID_CHANNEL_ID = process.env.RAID_THREAD_CHANNEL_ID || '1496954808324587680';
 
+// How often the polling fallback sweeps for pending requests (ms).
+// Polling makes processing resilient to the Realtime socket silently dropping.
+const POLL_INTERVAL_MS = 15 * 1000;
+
+// IDs currently being processed. Guards against the Realtime handler, the
+// startup sweep, and the poll all picking up the same row (which would create
+// duplicate threads). Single-process bot, so an in-memory set is sufficient.
+const inFlight = new Set();
+
 /**
  * Process a single thread_requests row: dispatch by action, create or update,
  * then mark the row done/error.
@@ -13,6 +22,10 @@ const DEFAULT_RAID_CHANNEL_ID = process.env.RAID_THREAD_CHANNEL_ID || '149695480
  * @param {Object} request - thread_requests row
  */
 async function processThreadRequest(client, request) {
+  // Skip if another trigger (Realtime / poll) is already handling this row.
+  if (inFlight.has(request.id)) return;
+  inFlight.add(request.id);
+
   const action = request.action || 'create';
   console.log(`[ThreadRequests] Processing request ${request.id} (${action}) for lineup ${request.lineup_id}`);
 
@@ -63,6 +76,33 @@ async function processThreadRequest(client, request) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', request.id);
+  } finally {
+    inFlight.delete(request.id);
+  }
+}
+
+/**
+ * Sweep for pending requests and process them. Runs on startup and on an
+ * interval as a fallback for when the Realtime subscription isn't delivering
+ * (e.g. the websocket dropped). Rows already in flight are skipped by
+ * processThreadRequest's guard.
+ * @param {import('discord.js').Client} client
+ */
+async function pollPendingRequests(client) {
+  const { data, error } = await supabase
+    .from('thread_requests')
+    .select('*')
+    .eq('status', 'pending');
+
+  if (error) {
+    console.error('[ThreadRequests] Failed to poll pending requests:', error);
+    return;
+  }
+  if (data && data.length > 0) {
+    console.log(`[ThreadRequests] Poll found ${data.length} pending request(s)`);
+    for (const row of data) {
+      processThreadRequest(client, row);
+    }
   }
 }
 
@@ -73,25 +113,19 @@ async function processThreadRequest(client, request) {
 function startThreadRequestHandler(client) {
   console.log('[ThreadRequests] Starting handler, default channel:', DEFAULT_RAID_CHANNEL_ID);
 
-  // Catch up on any pending requests that may have been created while the bot was offline
-  supabase
-    .from('thread_requests')
-    .select('*')
-    .eq('status', 'pending')
-    .then(({ data, error }) => {
-      if (error) {
-        console.error('[ThreadRequests] Failed to fetch pending requests:', error);
-        return;
-      }
-      if (data && data.length > 0) {
-        console.log(`[ThreadRequests] Found ${data.length} pending request(s) to catch up on`);
-        for (const row of data) {
-          processThreadRequest(client, row);
-        }
-      }
-    });
+  // Polling fallback: sweep pending requests on startup (catches anything queued
+  // while the bot was offline) and every POLL_INTERVAL_MS thereafter. This is the
+  // safety net that keeps the feature working even if Realtime stops delivering.
+  pollPendingRequests(client).catch(err =>
+    console.error('[ThreadRequests] Initial poll failed:', err));
 
-  // Subscribe to new inserts via Realtime
+  setInterval(() => {
+    pollPendingRequests(client).catch(err =>
+      console.error('[ThreadRequests] Scheduled poll failed:', err));
+  }, POLL_INTERVAL_MS);
+
+  // Subscribe to new inserts via Realtime for low-latency processing when the
+  // socket is healthy (the poll above is the fallback if it isn't).
   const channel = supabase
     .channel('thread-requests-handler')
     .on(
