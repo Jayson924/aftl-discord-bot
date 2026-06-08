@@ -76,6 +76,7 @@ async function sendNewUserNotification(client, user) {
       components: [buildButtons(user.discord_id)],
       allowedMentions: { parse: [] },
     })
+    .then(() => console.log(`[new-user] posted notification for ${user.discord_id}`))
     .catch(err => console.error('[new-user] send failed:', err.message));
 }
 
@@ -89,6 +90,7 @@ function subscribeNewUsers(client) {
       { event: 'INSERT', schema: 'public', table: 'app_users' },
       (payload) => {
         const row = payload.new || {};
+        console.log(`[new-user] INSERT received — discord_id=${row.discord_id} role=${row.role}`);
         if (!row.discord_id) return;
         // New users are created as 'guest'; skip anyone already promoted.
         if (row.role === 'guildmate' || row.role === 'admin') return;
