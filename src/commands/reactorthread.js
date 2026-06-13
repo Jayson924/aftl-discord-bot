@@ -4,6 +4,10 @@ const {
   ChannelType,
   ChannelFlags,
   EmbedBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder,
   MessageFlags,
 } = require('discord.js');
 
@@ -43,14 +47,49 @@ async function resolveForum(interaction) {
 
 module.exports = {
   data: new ContextMenuCommandBuilder()
-    .setName('Thread with reactors')
+    .setName('Create thread with reactions')
     .setType(ApplicationCommandType.Message),
 
+  // Right-click a message -> prompt for the thread name via a modal. The
+  // submit is routed back to handleModal() (see index.js). The target
+  // message id is carried on the modal's customId.
   async execute(interaction) {
+    // Default name based on the source thread/channel.
+    const sourceName = interaction.channel?.isThread?.()
+      ? interaction.channel.name
+      : interaction.channel?.name;
+    const defaultName = sourceName ? `Reactors — ${sourceName}` : 'Reactors thread';
+
+    const nameInput = new TextInputBuilder()
+      .setCustomId('name')
+      .setLabel('Thread name')
+      .setStyle(TextInputStyle.Short)
+      .setMaxLength(100)
+      .setRequired(true)
+      .setValue(defaultName.slice(0, 100));
+
+    const modal = new ModalBuilder()
+      .setCustomId(`reactorthread:${interaction.targetId}`)
+      .setTitle('Create reactor thread')
+      .addComponents(new ActionRowBuilder().addComponents(nameInput));
+
+    await interaction.showModal(modal);
+  },
+
+  // Handles the modal submit: gather reactors from the target message and
+  // create the named forum post.
+  async handleModal(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // Re-fetch the message so its reaction collection is fully populated.
-    const message = await interaction.targetMessage.fetch();
+    const messageId = interaction.customId.split(':')[1];
+    let threadName = interaction.fields.getTextInputValue('name').trim() || 'Reactors thread';
+    if (threadName.length > 100) threadName = threadName.slice(0, 100);
+
+    const message = await interaction.channel?.messages.fetch(messageId).catch(() => null);
+    if (!message) {
+      await interaction.editReply('Couldn\'t find that message anymore.');
+      return;
+    }
 
     const reactorIds = await collectReactorIds(message);
     if (reactorIds.size === 0) {
@@ -65,13 +104,6 @@ module.exports = {
       );
       return;
     }
-
-    // Name the post after the source thread/channel when we can.
-    const sourceName = interaction.channel?.isThread?.()
-      ? interaction.channel.name
-      : interaction.channel?.name;
-    let threadName = sourceName ? `Reactors — ${sourceName}` : 'Reactors thread';
-    if (threadName.length > 100) threadName = threadName.slice(0, 100);
 
     // Forums can be configured to require a tag on every post.
     const appliedTags = forum.flags?.has(ChannelFlags.RequireTag) && forum.availableTags?.length

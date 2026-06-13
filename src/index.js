@@ -53,6 +53,8 @@ client.on('interactionCreate', async (interaction) => {
       await signupHandler.handle(interaction, client);
     } else if (interaction.customId?.startsWith('newuser:')) {
       await handleNewUserButton(interaction);
+    } else if (interaction.customId?.startsWith('reactorthread:')) {
+      await client.commands.get('Create thread with reactions').handleModal(interaction);
     }
     return;
   }
