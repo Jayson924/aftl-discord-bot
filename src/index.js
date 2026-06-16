@@ -6,6 +6,7 @@ const { startThreadRequestHandler } = require('./lib/threadRequestHandler');
 const { startReminderScheduler } = require('./lib/reminderScheduler');
 const { startRaidRoleScheduler } = require('./lib/raidRoleScheduler');
 const { startNewUserNotifier, handleNewUserButton } = require('./lib/newUserNotifier');
+const { startNewCharacterNotifier, handleNewCharacterButton } = require('./lib/newCharacterNotifier');
 const signupHandler = require('./lib/signupHandler');
 
 const client = new Client({
@@ -44,6 +45,7 @@ client.once('ready', () => {
   startReminderScheduler(client);
   startRaidRoleScheduler(client);
   startNewUserNotifier(client);
+  startNewCharacterNotifier(client);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -53,6 +55,8 @@ client.on('interactionCreate', async (interaction) => {
       await signupHandler.handle(interaction, client);
     } else if (interaction.customId?.startsWith('newuser:')) {
       await handleNewUserButton(interaction);
+    } else if (interaction.customId?.startsWith('newchar:')) {
+      await handleNewCharacterButton(interaction);
     } else if (interaction.customId?.startsWith('reactorthread:')) {
       await client.commands.get('Create thread with reactions').handleModal(interaction);
     }

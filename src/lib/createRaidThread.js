@@ -2,7 +2,7 @@ const { EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle 
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 const { getClassEmojiTag } = require('./classEmojis');
-const { getLineupSize, getRaidColor } = require('./raidTypes');
+const { getLineupSize, getRaidColor, resolveRaidTag } = require('./raidTypes');
 
 // Guild timezone — raid times are displayed here in thread titles
 const GUILD_TIMEZONE = 'Asia/Singapore'; // GMT+8
@@ -188,10 +188,10 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
   // the embed gets posted as a follow-up message after creation.
   const isForum = channel.type === ChannelType.GuildForum;
 
-  // Match a forum tag whose name equals the lineup's raid_type (e.g.
-  // "Hardcore", "Classic"). Skipped if the tag doesn't exist.
+  // Resolve the forum tag for this raid type (by configured tag ID, falling
+  // back to name). Skipped if the raid type has no tag or it isn't on the forum.
   const raidTypeTag = isForum
-    ? (channel.availableTags || []).find(t => t.name.toLowerCase() === lineup.raid_type.toLowerCase())
+    ? resolveRaidTag(lineup.raid_type, channel.availableTags || [])
     : null;
   const appliedTags = raidTypeTag ? [raidTypeTag.id] : undefined;
 

@@ -5,12 +5,18 @@ const { formatShortTime } = require('./createRaidThread');
 const { getCompletionColumn, getRaidColor, usesTickets } = require('./raidTypes');
 
 const COMPLETED_TAG_NAME = process.env.RAID_COMPLETED_TAG_NAME || 'Cleared';
+// Exact tag ID for the Cleared tag (immune to renames/emoji). Hardcoded for
+// now; RAID_COMPLETED_TAG_ID env var overrides if set.
+const COMPLETED_TAG_ID = process.env.RAID_COMPLETED_TAG_ID || '1496973452417175612';
 
 function getCompletedTag(forumChannel) {
   if (!forumChannel || forumChannel.type !== ChannelType.GuildForum) return null;
-  return (forumChannel.availableTags || []).find(
-    t => t.name.toLowerCase() === COMPLETED_TAG_NAME.toLowerCase()
-  ) || null;
+  const tags = forumChannel.availableTags || [];
+  if (COMPLETED_TAG_ID) {
+    const byId = tags.find(t => t.id === COMPLETED_TAG_ID);
+    if (byId) return byId;
+  }
+  return tags.find(t => t.name.toLowerCase() === COMPLETED_TAG_NAME.toLowerCase()) || null;
 }
 
 async function applyCompletedTag(thread) {
@@ -211,6 +217,24 @@ async function clearLineup({ lineup, raidThread, skipTag = false }) {
     console.error('[clearLineup] failed to mark player weekly completions:', err);
   }
 
+  const { tagged, lootThread } = await applyClearedDiscordEffects({ lineup, raidThread, skipTag });
+
+  return { tagged, lootThread, playersUpdated, ticketsUpdated };
+}
+
+/**
+ * The Discord-side effects of a clear: apply the Completed forum tag and spin up
+ * a loot thread. Split out from clearLineup so a clear that originated on the
+ * web app (where lineups.completed + player completions are already written)
+ * can reuse just the Discord work without the completed guard or DB writes.
+ *
+ * @param {Object} opts
+ * @param {Object} opts.lineup - lineup row with at least { id, name, raid_type }
+ * @param {import('discord.js').ThreadChannel} opts.raidThread
+ * @param {boolean} [opts.skipTag] - skip applying the Completed tag
+ * @returns {Promise<{ tagged: boolean, lootThread: import('discord.js').ThreadChannel | null }>}
+ */
+async function applyClearedDiscordEffects({ lineup, raidThread, skipTag = false }) {
   let tagged = false;
   if (!skipTag) {
     tagged = await applyCompletedTag(raidThread).catch(err => {
@@ -226,11 +250,12 @@ async function clearLineup({ lineup, raidThread, skipTag = false }) {
     console.error('[clearLineup] failed to create loot thread:', err);
   }
 
-  return { tagged, lootThread, playersUpdated, ticketsUpdated };
+  return { tagged, lootThread };
 }
 
 module.exports = {
   clearLineup,
+  applyClearedDiscordEffects,
   applyCompletedTag,
   getCompletedTag,
   createLootThread,

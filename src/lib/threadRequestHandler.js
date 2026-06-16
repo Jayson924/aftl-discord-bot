@@ -1,6 +1,7 @@
 const supabase = require('../supabase');
 const { createRaidThread } = require('./createRaidThread');
 const { updateRaidThread } = require('./updateRaidThread');
+const { applyClearedDiscordEffects } = require('./clearLineup');
 
 // Default channel to create raid threads in when a request doesn't specify one.
 // Override with RAID_THREAD_CHANNEL_ID env var.
@@ -38,6 +39,35 @@ async function processThreadRequest(client, request) {
         lineupId: request.lineup_id,
       });
       resultThreadId = thread.id;
+    } else if (action === 'clear') {
+      // A clear that originated on the web app: lineups.completed + player
+      // completions are already written there. Here we only do the Discord
+      // side — apply the Cleared tag and create the loot thread.
+      const { data: lineup, error } = await supabase
+        .from('lineups')
+        .select('id, name, raid_type, raid_time, thread_id')
+        .eq('id', request.lineup_id)
+        .single();
+
+      if (error || !lineup) {
+        throw new Error(`Lineup ${request.lineup_id} not found for clear.`);
+      }
+
+      if (!lineup.thread_id) {
+        console.log(`[ThreadRequests] clear: lineup ${lineup.id} has no Discord thread — nothing to tag`);
+      } else {
+        const thread = await client.channels.fetch(lineup.thread_id).catch(() => null);
+        if (!thread) {
+          throw new Error(`Thread ${lineup.thread_id} not found or bot lacks access.`);
+        }
+        const result = await applyClearedDiscordEffects({ lineup, raidThread: thread });
+        resultThreadId = thread.id;
+
+        const parts = [`**${lineup.name}** marked as cleared from the web.`];
+        if (result.lootThread) parts.push(`Loot thread: <#${result.lootThread.id}>`);
+        await thread.send(parts.join('\n')).catch(err =>
+          console.error('[ThreadRequests] clear confirmation failed:', err));
+      }
     } else {
       const channelId = request.channel_id || DEFAULT_RAID_CHANNEL_ID;
       const channel = await client.channels.fetch(channelId);

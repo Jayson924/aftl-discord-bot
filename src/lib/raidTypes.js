@@ -49,6 +49,60 @@ function usesTickets(raidType) {
   return raidType === 'Classic';
 }
 
+// Forum tag name per raid type. Used only as a fallback when no tag ID env var
+// is configured. The actual tags have emoji in their display, so prefer the ID
+// map below — name matching is fragile if the emoji ends up in the name text.
+// Returns null for raid types with no dedicated tag (4-man, Unspecified, DDN Normal).
+function getRaidTagName(raidType) {
+  switch (raidType) {
+    case 'Hardcore':     return 'GDN HC';
+    case 'Classic':      return 'GDN C';
+    case 'DDN Hardcore': return 'DDN HC';
+    case 'DDN Classic':  return 'DDN C';
+    default:             return null;
+  }
+}
+
+// raid_type → forum tag ID. Tag IDs are exact and immune to renames/emoji, so
+// they win over name matching. Hardcoded for now; the matching RAID_TAG_* env
+// var overrides if set.
+const RAID_TAG_IDS = {
+  'Hardcore': '1496955589329158327',     // GDN HC
+  'Classic': '1496955552649973985',      // GDN C
+  'DDN Hardcore': '1508047897235816448', // DDN HC
+  'DDN Classic': '1508047435992272907',  // DDN C
+};
+
+const RAID_TAG_ENV_MAP = {
+  'Hardcore': 'RAID_TAG_GDN_HC',
+  'Classic': 'RAID_TAG_GDN_C',
+  'DDN Hardcore': 'RAID_TAG_DDN_HC',
+  'DDN Classic': 'RAID_TAG_DDN_C',
+};
+
+function getRaidTagId(raidType) {
+  const envVar = RAID_TAG_ENV_MAP[raidType];
+  if (envVar && process.env[envVar]) return process.env[envVar];
+  return RAID_TAG_IDS[raidType] || null;
+}
+
+// Resolve the forum tag object for a raid type from a forum channel's available
+// tags. Prefers the configured tag ID, then falls back to name match. Returns
+// null if nothing matches (tagging is then skipped).
+function resolveRaidTag(raidType, availableTags = []) {
+  const tagId = getRaidTagId(raidType);
+  if (tagId) {
+    const byId = availableTags.find(t => t.id === tagId);
+    if (byId) return byId;
+  }
+  const tagName = getRaidTagName(raidType);
+  if (tagName) {
+    const byName = availableTags.find(t => t.name.toLowerCase() === tagName.toLowerCase());
+    if (byName) return byName;
+  }
+  return null;
+}
+
 // Whether a character can still clear this raid this week.
 // Mirrors data.js#playerNeedsRaid on the web app. Pass a player row that
 // includes the relevant completion columns.
@@ -68,12 +122,12 @@ function isCharacterEligible(character, raidType) {
 // Slash command choice list. Order matches the web app's selectors.
 // DDN Hardcore is omitted from user-facing choices because the raid is
 // unreleased — the data layer still supports it for future activation.
+// DDN Normal / 4-man were retired from the web selectors; the data layer
+// keeps mapping them for any legacy lineup rows.
 const RAID_TYPE_CHOICES = [
+  { name: 'DDN Classic', value: 'DDN Classic' },
   { name: 'GDN Hardcore', value: 'Hardcore' },
   { name: 'GDN Classic', value: 'Classic' },
-  { name: 'DDN Classic', value: 'DDN Classic' },
-  { name: 'DDN Normal', value: 'DDN Normal' },
-  { name: '4-Man', value: '4-man' },
 ];
 
 module.exports = {
@@ -82,6 +136,9 @@ module.exports = {
   getCompletionColumn,
   getLineupSize,
   getRaidColor,
+  getRaidTagName,
+  getRaidTagId,
+  resolveRaidTag,
   isCharacterEligible,
   isFourManRaid,
   usesTickets,

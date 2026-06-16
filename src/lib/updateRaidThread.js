@@ -7,6 +7,40 @@ const { getLineupSize, getRaidColor } = require('./raidTypes');
 
 const GUILD_TIMEZONE = 'Asia/Singapore'; // GMT+8 — keep in sync with createRaidThread.js
 
+// When a player is dropped from a lineup, also remove their Discord user from
+// the raid thread (only if they have no other character still in the lineup).
+// Set REMOVE_DROPPED_THREAD_MEMBERS=false to disable. Note: raid threads/forum
+// posts are public, so a removed user can still rejoin — this mainly stops
+// their notifications and trims the member list.
+const REMOVE_DROPPED_MEMBERS =
+  String(process.env.REMOVE_DROPPED_THREAD_MEMBERS ?? 'true').toLowerCase() !== 'false';
+
+/**
+ * Remove from the thread any dropped owner who has no remaining character in the
+ * lineup. Safe for multi-character owners (an owner still holding another slot
+ * is kept). Best-effort: per-user failures (not a member, missing Manage Threads
+ * permission) are logged, not thrown. Returns the list of IDs actually removed.
+ *
+ * @param {import('discord.js').ThreadChannel} thread
+ * @param {Set<string>} removedDiscordIds - owners of dropped characters
+ * @param {Set<string>} remainingOwnerIds - owners still in the lineup
+ * @returns {Promise<string[]>}
+ */
+async function removeDroppedMembersFromThread(thread, removedDiscordIds, remainingOwnerIds) {
+  const toRemove = [...removedDiscordIds].filter(id => id && !remainingOwnerIds.has(id));
+  const removed = [];
+  for (const id of toRemove) {
+    try {
+      await thread.members.remove(id);
+      removed.push(id);
+      console.log(`[ThreadUpdate] Removed dropped member ${id} from thread ${thread.id}`);
+    } catch (err) {
+      console.warn(`[ThreadUpdate] Could not remove member ${id} from thread ${thread.id}:`, err.message);
+    }
+  }
+  return removed;
+}
+
 function formatShortTime(isoString) {
   const date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return null;
@@ -305,6 +339,9 @@ async function updateRaidThread({ client, lineupId }) {
     }
   }
 
+  // Discord user IDs actually removed from the thread (for the return value).
+  let removedFromThread = [];
+
   // Post a ping-message only for genuine roster changes
   if (rosterChanged) {
     const lines = ['🔄 **Lineup updated**'];
@@ -313,14 +350,16 @@ async function updateRaidThread({ client, lineupId }) {
     // longer in the lineup, so view.displayNameToRole won't have them).
     // Guests (no row in players) just won't get an emoji.
     const removedNameToRole = {};
+    const removedDiscordIds = new Set();
     if (removedNames.length > 0) {
       const { data: removedPlayers } = await supabase
         .from('players')
-        .select('name, role')
+        .select('name, role, discord_id')
         .in('name', removedNames);
       if (removedPlayers) {
         for (const p of removedPlayers) {
           if (p.role) removedNameToRole[p.name] = p.role;
+          if (p.discord_id) removedDiscordIds.add(p.discord_id);
         }
       }
     }
@@ -360,6 +399,14 @@ async function updateRaidThread({ client, lineupId }) {
     }
 
     await thread.send(lines.join('\n'));
+
+    // Remove dropped owners from the thread itself (not just the embed) when
+    // they have no remaining character in the lineup. Best-effort.
+    if (REMOVE_DROPPED_MEMBERS && removedDiscordIds.size > 0) {
+      const remainingOwnerIds = new Set(view.idToChars.keys());
+      removedFromThread = await removeDroppedMembersFromThread(
+        thread, removedDiscordIds, remainingOwnerIds);
+    }
   } else if (timeChanged && newUnix) {
     // Quiet rescheduling note — no pings (DB trigger re-arms the T-30/T-10 reminders)
     await thread.send(`⏰ **Raid time updated** — <t:${newUnix}:F> (<t:${newUnix}:R>)`);
@@ -369,7 +416,7 @@ async function updateRaidThread({ client, lineupId }) {
   // notesChanged-only: silent — the embed already shows the new notes.
   void notesChanged;
 
-  return { thread, lineup, addedNames, removedNames, timeChanged };
+  return { thread, lineup, addedNames, removedNames, timeChanged, removedFromThread };
 }
 
 module.exports = { updateRaidThread };
