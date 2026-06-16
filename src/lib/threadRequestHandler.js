@@ -63,7 +63,7 @@ async function processThreadRequest(client, request) {
         const result = await applyClearedDiscordEffects({ lineup, raidThread: thread });
         resultThreadId = thread.id;
 
-        const parts = [`**${lineup.name}** marked as cleared from the web.`];
+        const parts = [`**${lineup.name}** marked as cleared from the raid manager.`];
         if (result.lootThread) parts.push(`Loot thread: <#${result.lootThread.id}>`);
         await thread.send(parts.join('\n')).catch(err =>
           console.error('[ThreadRequests] clear confirmation failed:', err));
