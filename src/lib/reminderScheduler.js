@@ -17,7 +17,7 @@ async function sendReminder(client, lineup, minutesUntil, flagColumn) {
       return;
     }
 
-    const mentionGroups = await getLineupMentions(lineup.id);
+    const mentionGroups = await getLineupMentions(lineup.id, { includePilots: true });
     const mentions = formatMentionList(mentionGroups);
 
     const header = minutesUntil === 30

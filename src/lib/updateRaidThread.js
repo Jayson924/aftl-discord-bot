@@ -1,6 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const supabase = require('../supabase');
-const { formatMention } = require('./lineupMentions');
+const { formatMention, getPilotNameToId } = require('./lineupMentions');
 const { buildSignupRow } = require('./createRaidThread');
 const { getClassEmojiTag } = require('./classEmojis');
 const { getLineupSize, getRaidColor } = require('./raidTypes');
@@ -16,18 +16,19 @@ const REMOVE_DROPPED_MEMBERS =
   String(process.env.REMOVE_DROPPED_THREAD_MEMBERS ?? 'true').toLowerCase() !== 'false';
 
 /**
- * Remove from the thread any dropped owner who has no remaining character in the
- * lineup. Safe for multi-character owners (an owner still holding another slot
- * is kept). Best-effort: per-user failures (not a member, missing Manage Threads
- * permission) are logged, not thrown. Returns the list of IDs actually removed.
+ * Remove from the thread any dropped member (owner or pilot) who has no
+ * remaining character/pilot slot in the lineup. Safe for users still holding
+ * another slot in any role (kept via `remainingMemberIds`). Best-effort:
+ * per-user failures (not a member, missing Manage Threads permission) are
+ * logged, not thrown. Returns the list of IDs actually removed.
  *
  * @param {import('discord.js').ThreadChannel} thread
- * @param {Set<string>} removedDiscordIds - owners of dropped characters
- * @param {Set<string>} remainingOwnerIds - owners still in the lineup
+ * @param {Set<string>} removedDiscordIds - candidate ids to drop (owners/pilots)
+ * @param {Set<string>} remainingMemberIds - ids still present in any role
  * @returns {Promise<string[]>}
  */
-async function removeDroppedMembersFromThread(thread, removedDiscordIds, remainingOwnerIds) {
-  const toRemove = [...removedDiscordIds].filter(id => id && !remainingOwnerIds.has(id));
+async function removeDroppedMembersFromThread(thread, removedDiscordIds, remainingMemberIds) {
+  const toRemove = [...removedDiscordIds].filter(id => id && !remainingMemberIds.has(id));
   const removed = [];
   for (const id of toRemove) {
     try {
@@ -198,6 +199,34 @@ function extractCharNamesFromEmbed(embed) {
 }
 
 /**
+ * Strip the guest wrapper ([PUB]Name|Class) from a raw player name, returning
+ * the bare character name. Non-guest names are returned unchanged.
+ */
+function cleanCharName(rawName) {
+  const raw = rawName || '';
+  if (!raw.startsWith('[PUB]')) return raw;
+  const body = raw.slice(5);
+  const pipe = body.indexOf('|');
+  return pipe !== -1 ? body.slice(0, pipe) : body;
+}
+
+/**
+ * Extract pilot names from an embed description. buildLineupView renders each
+ * piloted slot with a trailing "(pilot: Name)" marker.
+ */
+function extractPilotsFromEmbed(embed) {
+  if (!embed || !embed.description) return [];
+  const names = [];
+  const re = /\(pilot: ([^)]+)\)/g;
+  let m;
+  while ((m = re.exec(embed.description)) !== null) {
+    const name = m[1].trim();
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+/**
  * Pull the unix timestamp out of the embed's "Scheduled" field if present.
  * Returns null when no scheduled time is set.
  */
@@ -342,32 +371,82 @@ async function updateRaidThread({ client, lineupId }) {
   // Discord user IDs actually removed from the thread (for the return value).
   let removedFromThread = [];
 
-  // Post a ping-message only for genuine roster changes
-  if (rosterChanged) {
-    const lines = ['🔄 **Lineup updated**'];
+  // --- Pilot diff (pilots are stored as display-name strings) ---
+  const pilotNameToId = await getPilotNameToId();
 
-    // Look up roles for removed names from the players table (they're no
-    // longer in the lineup, so view.displayNameToRole won't have them).
-    // Guests (no row in players) just won't get an emoji.
-    const removedNameToRole = {};
-    const removedDiscordIds = new Set();
-    if (removedNames.length > 0) {
-      const { data: removedPlayers } = await supabase
-        .from('players')
-        .select('name, role, discord_id')
-        .in('name', removedNames);
-      if (removedPlayers) {
-        for (const p of removedPlayers) {
-          if (p.role) removedNameToRole[p.name] = p.role;
-          if (p.discord_id) removedDiscordIds.add(p.discord_id);
-        }
+  // New pilots: lowercased key → original display string
+  const newPilotNameMap = new Map();
+  // New pilots grouped by resolved discord id, for pinging/adding. Skips
+  // free-text pilots that don't resolve and pilots who own the character
+  // they're piloting (they're already pinged as the owner).
+  const newPilotIdToChars = new Map();
+  for (const lp of lineup.lineup_players || []) {
+    const pilot = (lp.pilot_name || '').trim();
+    if (!pilot) continue;
+    newPilotNameMap.set(pilot.toLowerCase(), pilot);
+
+    const pid = pilotNameToId.get(pilot.toLowerCase());
+    if (!pid) continue;
+    const ownerId = view.discordMap[lp.player_name];
+    if (ownerId && ownerId === pid) continue;
+    const cleanName = cleanCharName(lp.player_name);
+    if (!newPilotIdToChars.has(pid)) newPilotIdToChars.set(pid, []);
+    newPilotIdToChars.get(pid).push({ name: cleanName, role: view.displayNameToRole[cleanName] || null });
+  }
+
+  // Old pilots from the previous embed's "(pilot: Name)" markers
+  const oldPilotNameMap = new Map();
+  for (const n of extractPilotsFromEmbed(oldEmbed)) oldPilotNameMap.set(n.toLowerCase(), n);
+  const oldPilotIds = new Set();
+  for (const key of oldPilotNameMap.keys()) {
+    const pid = pilotNameToId.get(key);
+    if (pid) oldPilotIds.add(pid);
+  }
+
+  const addedPilotKeys = [...newPilotNameMap.keys()].filter(k => !oldPilotNameMap.has(k));
+  const removedPilotKeys = [...oldPilotNameMap.keys()].filter(k => !newPilotNameMap.has(k));
+  const pilotsChanged = addedPilotKeys.length > 0 || removedPilotKeys.length > 0;
+
+  // Resolved pilot ids to ping (newly piloting); unresolved ones get a text line
+  const addedPilotPing = [...newPilotIdToChars.entries()].filter(([pid]) => !oldPilotIds.has(pid));
+  const addedPilotUnresolved = addedPilotKeys
+    .filter(k => !pilotNameToId.get(k))
+    .map(k => newPilotNameMap.get(k));
+  const removedPilotDisplay = removedPilotKeys.map(k => oldPilotNameMap.get(k));
+
+  // Members the lineup should still contain (owners + resolved pilots) — used
+  // so an owner who became a pilot (or vice versa) isn't pruned.
+  const remainingMemberIds = new Set([
+    ...view.idToChars.keys(),
+    ...newPilotIdToChars.keys(),
+  ]);
+
+  // Look up roles for removed names from the players table (they're no longer
+  // in the lineup, so view.displayNameToRole won't have them). Guests (no row
+  // in players) just won't get an emoji.
+  const removedNameToRole = {};
+  const removedOwnerIds = new Set();
+  if (removedNames.length > 0) {
+    const { data: removedPlayers } = await supabase
+      .from('players')
+      .select('name, role, discord_id')
+      .in('name', removedNames);
+    if (removedPlayers) {
+      for (const p of removedPlayers) {
+        if (p.role) removedNameToRole[p.name] = p.role;
+        if (p.discord_id) removedOwnerIds.add(p.discord_id);
       }
     }
+  }
 
-    const withEmoji = (name, role) => {
-      const emoji = role ? getClassEmojiTag(role) : '';
-      return emoji ? `${emoji} ${name}` : name;
-    };
+  const withEmoji = (name, role) => {
+    const emoji = role ? getClassEmojiTag(role) : '';
+    return emoji ? `${emoji} ${name}` : name;
+  };
+
+  // Post a ping-message for genuine roster or pilot changes
+  if (rosterChanged || pilotsChanged) {
+    const lines = ['🔄 **Lineup updated**'];
 
     if (addedNames.length > 0) {
       // Ping owners of newly added characters with their char names
@@ -398,14 +477,32 @@ async function updateRaidThread({ client, lineupId }) {
       lines.push(`**Removed:** ${removedLabelled}`);
     }
 
+    // Ping newly assigned pilots so they're notified and added to the thread
+    if (addedPilotPing.length > 0) {
+      const pilotMentions = addedPilotPing
+        .map(([discordId, characters]) => formatMention({ discordId, characters, isPilot: true }))
+        .join('\n');
+      lines.push('**Pilots added:**');
+      lines.push(pilotMentions);
+    }
+    if (addedPilotUnresolved.length > 0) {
+      lines.push(addedPilotUnresolved.map(n => `• pilot: ${n}`).join('\n'));
+    }
+
+    if (removedPilotDisplay.length > 0) {
+      lines.push(`**Pilots removed:** ${removedPilotDisplay.join(', ')}`);
+    }
+
     await thread.send(lines.join('\n'));
 
-    // Remove dropped owners from the thread itself (not just the embed) when
-    // they have no remaining character in the lineup. Best-effort.
-    if (REMOVE_DROPPED_MEMBERS && removedDiscordIds.size > 0) {
-      const remainingOwnerIds = new Set(view.idToChars.keys());
-      removedFromThread = await removeDroppedMembersFromThread(
-        thread, removedDiscordIds, remainingOwnerIds);
+    // Prune the thread member list: dropped owners and dropped pilots who have
+    // no remaining character/pilot slot in the lineup. Best-effort.
+    if (REMOVE_DROPPED_MEMBERS) {
+      const candidateRemoveIds = new Set([...removedOwnerIds, ...oldPilotIds]);
+      if (candidateRemoveIds.size > 0) {
+        removedFromThread = await removeDroppedMembersFromThread(
+          thread, candidateRemoveIds, remainingMemberIds);
+      }
     }
   } else if (timeChanged && newUnix) {
     // Quiet rescheduling note — no pings (DB trigger re-arms the T-30/T-10 reminders)

@@ -171,7 +171,7 @@ async function createLootThread(lineup, raidThread) {
     await lootThread.send({ embeds: [embed] });
   }
 
-  const mentionGroups = await getLineupMentions(lineup.id);
+  const mentionGroups = await getLineupMentions(lineup.id, { includePilots: true });
   if (mentionGroups.length > 0) {
     await lootThread.send(formatMentionList(mentionGroups));
   }

@@ -218,8 +218,9 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
     embedMessage = await thread.send({ embeds: [embed], components: [signupRow] });
   }
 
-  // Ping players in the thread — show each mention alongside their character(s)
-  const mentionGroups = await getLineupMentions(lineup.id);
+  // Ping players in the thread — show each mention alongside their character(s),
+  // and ping pilots too (resolved from their display name to a Discord ID).
+  const mentionGroups = await getLineupMentions(lineup.id, { includePilots: true });
   if (mentionGroups.length > 0) {
     await thread.send(formatMentionList(mentionGroups));
   }
