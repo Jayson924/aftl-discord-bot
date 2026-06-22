@@ -18,6 +18,7 @@ const {
   EmbedBuilder,
 } = require('discord.js');
 const supabase = require('../supabase');
+const { onPlayersChange, startPlayersChanges } = require('./playersChanges');
 
 // Channel the review notifications go to. Defaults to the new-user review
 // channel so characters land in the same place unless split out explicitly.
@@ -89,33 +90,29 @@ async function sendNewCharacterNotification(client, player) {
 }
 
 // === Realtime subscription ===
+//
+// Reacts to players INSERTs via the shared players-changes hub. It no longer
+// opens its own channel: a second `postgres_changes` binding on `players`
+// collided with the raid-role channel's `event: '*'` binding and dropped to
+// CHANNEL_ERROR, so INSERT events never arrived.
 
-function subscribeNewCharacters(client) {
-  return supabase
-    .channel('new-character-notifier-players')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'players' },
-      (payload) => {
-        const row = payload.new || {};
-        console.log(`[new-char] INSERT received — id=${row.id} name=${row.name}`);
-        if (!row.id) return;
-        // Skip characters that are already actioned (defensive — fresh inserts
-        // normally aren't whitelisted/ignored/excluded yet).
-        if (row.whitelisted === true || row.whitelist_ignored === true || row.exclude === true) return;
-        sendNewCharacterNotification(client, row).catch(err =>
-          console.error('[new-char] notify failed:', err)
-        );
-      }
-    )
-    .subscribe((status) => {
-      console.log(`[new-char] players channel: ${status}`);
-    });
+function handlePlayersChange(client, payload) {
+  if (payload.eventType !== 'INSERT') return;
+  const row = payload.new || {};
+  console.log(`[new-char] INSERT received — id=${row.id} name=${row.name}`);
+  if (!row.id) return;
+  // Skip characters that are already actioned (defensive — fresh inserts
+  // normally aren't whitelisted/ignored/excluded yet).
+  if (row.whitelisted === true || row.whitelist_ignored === true || row.exclude === true) return;
+  sendNewCharacterNotification(client, row).catch(err =>
+    console.error('[new-char] notify failed:', err)
+  );
 }
 
 function startNewCharacterNotifier(client) {
   console.log(`[new-char] starting notifier → channel ${getChannelId()}`);
-  subscribeNewCharacters(client);
+  onPlayersChange((payload) => handlePlayersChange(client, payload));
+  startPlayersChanges();
 }
 
 // === Button interaction handling ===

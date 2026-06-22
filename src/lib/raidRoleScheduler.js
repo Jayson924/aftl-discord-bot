@@ -6,6 +6,7 @@
 //     dropped events around the weekly DB cleanup.
 
 const supabase = require('../supabase');
+const { onPlayersChange, startPlayersChanges } = require('./playersChanges');
 const { syncUserRaidRoles, syncAllUsers } = require('./raidRoleSync');
 const { ALL_COMPLETION_COLUMNS } = require('./raidTypes');
 
@@ -47,41 +48,33 @@ function debouncedSync(guild, discordId) {
   pendingSyncs.set(discordId, handle);
 }
 
-function subscribePlayers(client) {
-  return supabase
-    .channel('raid-role-sync-players')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'players' },
-      (payload) => {
-        const guild = getPrimaryGuild(client);
-        if (!guild) return;
+// Handles a single players change for raid-role purposes. Registered on the
+// shared players-changes hub (see playersChanges.js) so it no longer opens its
+// own channel — that collided with the new-character notifier's binding.
+function handlePlayersChange(client, payload) {
+  const guild = getPrimaryGuild(client);
+  if (!guild) return;
 
-        const oldRow = payload.old || {};
-        const newRow = payload.new || {};
-        const affected = new Set();
+  const oldRow = payload.old || {};
+  const newRow = payload.new || {};
+  const affected = new Set();
 
-        if (payload.eventType === 'INSERT') {
-          if (newRow.discord_id) affected.add(newRow.discord_id);
-        } else if (payload.eventType === 'DELETE') {
-          if (oldRow.discord_id) affected.add(oldRow.discord_id);
-        } else if (payload.eventType === 'UPDATE') {
-          let triggered = false;
-          for (const col of PLAYER_TRIGGER_COLUMNS) {
-            if (oldRow[col] !== newRow[col]) { triggered = true; break; }
-          }
-          if (!triggered) return;
-          // Owner change → both old and new owner need a re-evaluation.
-          if (oldRow.discord_id) affected.add(oldRow.discord_id);
-          if (newRow.discord_id) affected.add(newRow.discord_id);
-        }
+  if (payload.eventType === 'INSERT') {
+    if (newRow.discord_id) affected.add(newRow.discord_id);
+  } else if (payload.eventType === 'DELETE') {
+    if (oldRow.discord_id) affected.add(oldRow.discord_id);
+  } else if (payload.eventType === 'UPDATE') {
+    let triggered = false;
+    for (const col of PLAYER_TRIGGER_COLUMNS) {
+      if (oldRow[col] !== newRow[col]) { triggered = true; break; }
+    }
+    if (!triggered) return;
+    // Owner change → both old and new owner need a re-evaluation.
+    if (oldRow.discord_id) affected.add(oldRow.discord_id);
+    if (newRow.discord_id) affected.add(newRow.discord_id);
+  }
 
-        for (const discordId of affected) debouncedSync(guild, discordId);
-      }
-    )
-    .subscribe((status) => {
-      console.log(`[raid-role-realtime] players channel: ${status}`);
-    });
+  for (const discordId of affected) debouncedSync(guild, discordId);
 }
 
 function subscribeAppUsers(client) {
@@ -152,7 +145,9 @@ async function checkWeeklyGrant(client) {
 
 function startRaidRoleScheduler(client) {
   console.log('[raid-role-scheduler] starting (Realtime + weekly Fri 5:05pm PT)');
-  subscribePlayers(client);
+  // Players changes come through the shared hub (one channel for the whole bot).
+  onPlayersChange((payload) => handlePlayersChange(client, payload));
+  startPlayersChanges();
   subscribeAppUsers(client);
   setInterval(() => {
     checkWeeklyGrant(client).catch(err => {
