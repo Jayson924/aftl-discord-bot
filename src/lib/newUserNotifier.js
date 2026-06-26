@@ -16,6 +16,7 @@ const {
   EmbedBuilder,
 } = require('discord.js');
 const supabase = require('../supabase');
+const { onAppUsersChange, startAppUsersChanges } = require('./appUsersChanges');
 
 // Channel the review notifications go to. Override with NEW_USER_CHANNEL_ID.
 const DEFAULT_CHANNEL_ID = '1513384145978523678';
@@ -81,32 +82,28 @@ async function sendNewUserNotification(client, user) {
 }
 
 // === Realtime subscription ===
+//
+// Reacts to app_users INSERTs via the shared app-users-changes hub. It no longer
+// opens its own channel: a second postgres_changes binding on app_users collided
+// with the raid-role scheduler's app_users channel and dropped to CHANNEL_ERROR,
+// so INSERT events never arrived (and poisoned the shared realtime connection).
 
-function subscribeNewUsers(client) {
-  return supabase
-    .channel('new-user-notifier-app-users')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'app_users' },
-      (payload) => {
-        const row = payload.new || {};
-        console.log(`[new-user] INSERT received — discord_id=${row.discord_id} role=${row.role}`);
-        if (!row.discord_id) return;
-        // New users are created as 'guest'; skip anyone already promoted.
-        if (row.role === 'guildmate' || row.role === 'admin') return;
-        sendNewUserNotification(client, row).catch(err =>
-          console.error('[new-user] notify failed:', err)
-        );
-      }
-    )
-    .subscribe((status) => {
-      console.log(`[new-user] app_users channel: ${status}`);
-    });
+function handleAppUsersChange(client, payload) {
+  if (payload.eventType !== 'INSERT') return;
+  const row = payload.new || {};
+  console.log(`[new-user] INSERT received — discord_id=${row.discord_id} role=${row.role}`);
+  if (!row.discord_id) return;
+  // New users are created as 'guest'; skip anyone already promoted.
+  if (row.role === 'guildmate' || row.role === 'admin') return;
+  sendNewUserNotification(client, row).catch(err =>
+    console.error('[new-user] notify failed:', err)
+  );
 }
 
 function startNewUserNotifier(client) {
   console.log(`[new-user] starting notifier → channel ${getChannelId()}`);
-  subscribeNewUsers(client);
+  onAppUsersChange((payload) => handleAppUsersChange(client, payload));
+  startAppUsersChanges();
 }
 
 // === Button interaction handling ===

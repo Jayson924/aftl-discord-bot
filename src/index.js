@@ -7,6 +7,7 @@ const { startReminderScheduler } = require('./lib/reminderScheduler');
 const { startRaidRoleScheduler } = require('./lib/raidRoleScheduler');
 const { startNewUserNotifier, handleNewUserButton } = require('./lib/newUserNotifier');
 const { startNewCharacterNotifier, handleNewCharacterButton } = require('./lib/newCharacterNotifier');
+const { startLootSync } = require('./lib/lootThread');
 const signupHandler = require('./lib/signupHandler');
 
 const client = new Client({
@@ -46,6 +47,7 @@ client.once('ready', () => {
   startRaidRoleScheduler(client);
   startNewUserNotifier(client);
   startNewCharacterNotifier(client);
+  startLootSync(client);
 });
 
 client.on('interactionCreate', async (interaction) => {

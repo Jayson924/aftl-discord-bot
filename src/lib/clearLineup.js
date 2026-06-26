@@ -1,8 +1,9 @@
-const { EmbedBuilder, ChannelType } = require('discord.js');
+const { ChannelType } = require('discord.js');
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 const { formatShortTime } = require('./createRaidThread');
-const { getCompletionColumn, getRaidColor, usesTickets } = require('./raidTypes');
+const { getCompletionColumn, usesTickets } = require('./raidTypes');
+const { buildLootEmbed, getRosterDisplay } = require('./lootThread');
 
 const COMPLETED_TAG_NAME = process.env.RAID_COMPLETED_TAG_NAME || 'Cleared';
 // Exact tag ID for the Cleared tag (immune to renames/emoji). Hardcoded for
@@ -115,37 +116,10 @@ async function createLootThread(lineup, raidThread) {
   const lootChannel = await raidThread.client.channels.fetch(lootChannelId).catch(() => null);
   if (!lootChannel) return null;
 
-  const { data: lineupPlayers } = await supabase
-    .from('lineup_players')
-    .select('player_name, slot_position, uses_ticket, pilot_name')
-    .eq('lineup_id', lineup.id)
-    .order('slot_position');
-
-  const names = (lineupPlayers || []).map(lp => lp.player_name).filter(Boolean);
-  const discordMap = {};
-  if (names.length > 0) {
-    const { data: players } = await supabase
-      .from('players')
-      .select('name, discord_id')
-      .in('name', names);
-    for (const p of players || []) {
-      if (p.discord_id) discordMap[p.name] = p.discord_id;
-    }
-  }
-
-  const roster = (lineupPlayers || [])
-    .map((lp, i) => {
-      const id = discordMap[lp.player_name];
-      const display = id ? `**${lp.player_name}** — <@${id}>` : `**${lp.player_name}**`;
-      return `\`${i + 1}.\` ${display}`;
-    })
-    .join('\n');
-
-  const embed = new EmbedBuilder()
-    .setTitle(`${lineup.name} — Loot`)
-    .setDescription(roster || '_no players_')
-    .addFields({ name: 'Raid thread', value: `<#${raidThread.id}>`, inline: true })
-    .setColor(getRaidColor(lineup.raid_type));
+  // The thread's original message is the combined roster + loot embed, which the
+  // bot edits in place as loot is logged (see lootThread.js).
+  const rosterDisplay = await getRosterDisplay(lineup.id, lineup.raid_type);
+  const embed = buildLootEmbed(lineup, [], rosterDisplay, { raidThreadId: raidThread.id });
 
   // Match the raid thread naming so paired raid + loot threads are easy to spot:
   //   "<raid_type> <name>"  optionally suffixed with " - <shortTime>"
@@ -156,24 +130,37 @@ async function createLootThread(lineup, raidThread) {
 
   const isForum = lootChannel.type === ChannelType.GuildForum;
   let lootThread;
+  let starter;
   if (isForum) {
     lootThread = await lootChannel.threads.create({
       name: threadName,
       message: { embeds: [embed] },
       reason: `Loot thread for ${lineup.name}`,
     });
+    starter = await lootThread.fetchStarterMessage().catch(() => null);
   } else {
     lootThread = await lootChannel.threads.create({
       name: threadName,
       type: ChannelType.PublicThread,
       reason: `Loot thread for ${lineup.name}`,
     });
-    await lootThread.send({ embeds: [embed] });
+    starter = await lootThread.send({ embeds: [embed] });
   }
 
   const mentionGroups = await getLineupMentions(lineup.id, { includePilots: true });
   if (mentionGroups.length > 0) {
     await lootThread.send(formatMentionList(mentionGroups));
+  }
+
+  // Link the thread + its original message so `/loot` and the realtime sync can
+  // edit it in place. (For forum posts the starter message id === the thread id.)
+  try {
+    await supabase
+      .from('lineups')
+      .update({ loot_thread_id: lootThread.id, loot_message_id: starter?.id || lootThread.id })
+      .eq('id', lineup.id);
+  } catch (err) {
+    console.error('[clearLineup] failed to link loot thread:', err.message);
   }
 
   return lootThread;

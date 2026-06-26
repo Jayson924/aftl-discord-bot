@@ -5,8 +5,8 @@
 //   - Weekly Friday 5:05pm PT safety-net full reconcile in case Realtime
 //     dropped events around the weekly DB cleanup.
 
-const supabase = require('../supabase');
 const { onPlayersChange, startPlayersChanges } = require('./playersChanges');
+const { onAppUsersChange, startAppUsersChanges } = require('./appUsersChanges');
 const { syncUserRaidRoles, syncAllUsers } = require('./raidRoleSync');
 const { ALL_COMPLETION_COLUMNS } = require('./raidTypes');
 
@@ -77,27 +77,20 @@ function handlePlayersChange(client, payload) {
   for (const discordId of affected) debouncedSync(guild, discordId);
 }
 
-function subscribeAppUsers(client) {
-  return supabase
-    .channel('raid-role-sync-app-users')
-    .on(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'app_users' },
-      (payload) => {
-        const oldRow = payload.old || {};
-        const newRow = payload.new || {};
-        if (oldRow.exclude === newRow.exclude) return;
-        const discordId = newRow.discord_id || oldRow.discord_id;
-        if (!discordId) return;
+// app_users changes come through the shared app-users-changes hub (one channel
+// for the whole bot) — a second app_users channel here collided with the
+// new-user notifier's and dropped to CHANNEL_ERROR. Only exclude toggles matter.
+function handleAppUsersChange(client, payload) {
+  if (payload.eventType !== 'UPDATE') return;
+  const oldRow = payload.old || {};
+  const newRow = payload.new || {};
+  if (oldRow.exclude === newRow.exclude) return;
+  const discordId = newRow.discord_id || oldRow.discord_id;
+  if (!discordId) return;
 
-        const guild = getPrimaryGuild(client);
-        if (!guild) return;
-        debouncedSync(guild, discordId);
-      }
-    )
-    .subscribe((status) => {
-      console.log(`[raid-role-realtime] app_users channel: ${status}`);
-    });
+  const guild = getPrimaryGuild(client);
+  if (!guild) return;
+  debouncedSync(guild, discordId);
 }
 
 // Friday 5:05pm PT — the GitHub Actions weekly cleanup runs at 5:00pm PT, so
@@ -145,10 +138,12 @@ async function checkWeeklyGrant(client) {
 
 function startRaidRoleScheduler(client) {
   console.log('[raid-role-scheduler] starting (Realtime + weekly Fri 5:05pm PT)');
-  // Players changes come through the shared hub (one channel for the whole bot).
+  // Players + app_users changes come through shared hubs (one channel each for
+  // the whole bot) so overlapping postgres_changes bindings can't collide.
   onPlayersChange((payload) => handlePlayersChange(client, payload));
   startPlayersChanges();
-  subscribeAppUsers(client);
+  onAppUsersChange((payload) => handleAppUsersChange(client, payload));
+  startAppUsersChanges();
   setInterval(() => {
     checkWeeklyGrant(client).catch(err => {
       console.error('[raid-role-weekly] check failed:', err);
