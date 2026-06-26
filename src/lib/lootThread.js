@@ -231,7 +231,7 @@ function buildLootEmbed(lineup, lootRows, rosterDisplay, { raidThreadId } = {}) 
           : '⚖️ _Unassigned_';
         const sub = g.total > 0 ? `  ·  🪙 ${fmtGold(g.total)}` : '';
         const items = g.items
-          .map(l => ` ${l.sold ? `🪙 ${fmtGold(l.price)}` : '`unsold`'} — ${escapeMd(l.item)}`)
+          .map(l => ` ${l.sold ? `🪙 ${fmtGold(l.price)}` : '`not yet sold`'} — ${escapeMd(l.item)}`)
           .join('\n');
         return `${head}${sub}\n${items}`;
       })

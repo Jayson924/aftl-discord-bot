@@ -94,7 +94,7 @@ module.exports = {
         .filter(l => l.item.toLowerCase().includes(query))
         .slice(0, 25)
         .map(l => {
-          const status = l.sold ? `🪙${fmtGold(l.price)}` : 'unsold';
+          const status = l.sold ? `🪙${fmtGold(l.price)}` : 'not yet sold';
           const holder = l.heldBy ? ` · ${l.heldBy}` : '';
           return { name: `${l.item} (${status}${holder})`.slice(0, 100), value: l.id };
         });
@@ -132,14 +132,22 @@ module.exports = {
       if (sub === 'sold') {
         const value = interaction.options.getString('item');
         const price = interaction.options.getInteger('price');
-        const rows = await getLootRows(lineup.id);
+        const [rows, rosterDisplay] = await Promise.all([
+          getLootRows(lineup.id),
+          getRosterDisplay(lineup.id, lineup.raid_type),
+        ]);
         const row = resolveLootRow(rows, value, { unsoldOnly: true });
         if (!row) {
           return interaction.reply({ content: `Couldn't find a loot entry matching that. Pick one from the list.`, ephemeral: true });
         }
-        await updateLootEntry(row.id, { sold: true, price });
+        // Whoever marks it sold becomes the holder — their roster character if
+        // they're in the party, otherwise their Discord display name.
+        const sellerName = rosterDisplay.find(r => r.discordId === interaction.user.id)?.name
+          || interaction.member?.displayName
+          || interaction.user.username;
+        await updateLootEntry(row.id, { sold: true, price, heldBy: sellerName });
         await updateLootMessage(interaction.client, lineup.id);
-        return interaction.reply(`💰 **${row.item}** sold for 🪙 **${fmtGold(price)}**.`);
+        return interaction.reply(`💰 **${row.item}** sold for 🪙 **${fmtGold(price)}** — held by **${sellerName}**.`);
       }
 
       if (sub === 'remove') {
