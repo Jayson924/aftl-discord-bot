@@ -1,6 +1,19 @@
-const { Events, EmbedBuilder } = require('discord.js');
+// Party-screenshot → cleared loot thread.
+//
+// When someone posts a raid party screenshot in LOOT_CHANNEL_ID, the bot reads
+// the character names with Claude Vision, creates the lineup **as cleared**, and
+// opens a thread on the message that serves as the lineup's loot thread itself —
+// roster + loot tracker embed, wired for `/loot`, the sell-by-screenshot flow,
+// and realtime sync. Because the lineup is already completed and this thread is
+// its loot thread, the normal clear flow won't create a duplicate loot thread.
+//
+// (Sale screenshots posted *inside* a loot thread are handled separately by
+// loot-sold-screenshot.js.)
+
+const { Events } = require('discord.js');
 const supabase = require('../supabase');
-const { getLineupSize, getRaidColor } = require('../lib/raidTypes');
+const { buildLootEmbed, getRosterDisplay } = require('../lib/lootThread');
+const { markPlayersCompletedForLineup } = require('../lib/clearLineup');
 
 function parseMessage(text) {
   const trimmed = text.trim();
@@ -152,13 +165,15 @@ async function processScreenshot(message, attachment, raidType, lineupName) {
     const count = existing?.length || 0;
     const finalName = count === 0 ? lineupName : `${lineupName} #${count + 1}`;
 
+    // The party screenshot stands in for a cleared raid → save the lineup as
+    // completed so the normal clear flow won't make a duplicate loot thread.
     const { data: savedLineup, error: lineupError } = await supabase
       .from('lineups')
       .insert({
         name: finalName,
         raid_type: raidType,
         status: 'ready',
-        completed: false,
+        completed: true,
         is_template: false,
       })
       .select()
@@ -183,61 +198,55 @@ async function processScreenshot(message, attachment, raidType, lineupName) {
       if (playersError) {
         console.error('Error saving lineup players:', playersError);
       }
+
+      // Mark the players' weekly completion (mirrors clearLineup). No-op for
+      // raid types without weekly tracking (4-man / Unspecified).
+      try {
+        await markPlayersCompletedForLineup({ id: savedLineup.id, raid_type: raidType });
+      } catch (err) {
+        console.error('[loot-screenshot] mark completions failed:', err.message);
+      }
     }
 
     const allMentions = new Set();
-    const roster = extractedNames
-      .map((name, i) => {
-        const discordId = discordMap[name];
-        if (discordId) {
-          allMentions.add(discordId);
-          return `\`${i + 1}.\` <@${discordId}>`;
-        }
-        return `\`${i + 1}.\` [PUB] ${name}`;
-      })
-      .join('\n');
-
-    const embed = new EmbedBuilder()
-      .setTitle(`${raidType} Raid`)
-      .setDescription(roster)
-      .setColor(getRaidColor(raidType))
-      .setImage(attachment.url);
-
-    if (savedLineup) {
-      embed.addFields({
-        name: 'Lineup',
-        value: `Saved as "${finalName}"`,
-        inline: true,
-      });
-    }
-
-    if (parsed.notes) {
-      embed.setFooter({ text: parsed.notes });
+    for (const name of extractedNames) {
+      const id = discordMap[name];
+      if (id) allMentions.add(id);
     }
 
     await message.reactions.removeAll();
 
+    // This thread IS the cleared loot thread — no separate one is created.
     const thread = await message.startThread({
       name: `${finalName} — Loot`,
-      reason: 'Loot discussion thread from screenshot',
+      reason: 'Cleared loot thread from party screenshot',
     });
 
-    await thread.send({ embeds: [embed] });
+    // Post the loot tracker embed (roster + loot) and link it so `/loot`, the
+    // sell-by-screenshot flow, and realtime sync all work on this thread.
+    let trackerId = null;
+    if (savedLineup) {
+      const rosterDisplay = await getRosterDisplay(savedLineup.id, raidType);
+      const tracker = await thread.send({
+        embeds: [buildLootEmbed({ name: finalName, raid_type: raidType }, [], rosterDisplay)],
+      });
+      trackerId = tracker.id;
+    }
 
     if (allMentions.size > 0) {
       const pingStr = [...allMentions].map((id) => `<@${id}>`).join('\n');
       await thread.send(pingStr);
     }
 
-    // Persist thread id on the lineup row
+    // The thread is both the lineup's thread and its loot thread.
     if (savedLineup) {
-      const { error: threadIdError } = await supabase
+      const { error: linkError } = await supabase
         .from('lineups')
-        .update({ thread_id: thread.id })
+        .update({ thread_id: thread.id, loot_thread_id: thread.id, loot_message_id: trackerId })
         .eq('id', savedLineup.id);
 
-      if (threadIdError) {
-        console.error('Failed to persist thread_id on lineup:', threadIdError);
+      if (linkError) {
+        console.error('Failed to link thread on lineup:', linkError);
       }
     }
   } catch (err) {
