@@ -10,6 +10,17 @@ const { startNewCharacterNotifier, handleNewCharacterButton } = require('./lib/n
 const { startLootSync } = require('./lib/lootThread');
 const signupHandler = require('./lib/signupHandler');
 
+// Global safety nets — a thrown error in one event/handler must NEVER take the
+// whole bot down. On Node 15+ an unhandled promise rejection terminates the
+// process by default, which is how a single bad event (e.g. a screenshot that
+// errored mid-processing) was killing the bot. Log and keep running.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -36,7 +47,15 @@ if (fs.existsSync(eventsPath)) {
   const eventFiles = fs.readdirSync(eventsPath).filter(f => f.endsWith('.js'));
   for (const file of eventFiles) {
     const event = require(path.join(eventsPath, file));
-    client.on(event.name, (...args) => event.execute(...args));
+    // Wrap every event handler so one throwing handler can't crash the bot
+    // (mirrors the try/catch around command execution below).
+    client.on(event.name, async (...args) => {
+      try {
+        await event.execute(...args);
+      } catch (err) {
+        console.error(`[event:${event.name}] handler error:`, err);
+      }
+    });
   }
 }
 

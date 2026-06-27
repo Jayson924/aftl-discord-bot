@@ -130,13 +130,19 @@ module.exports = {
     if (!attachment) return;
 
     // Must be a linked loot thread.
-    const lineup = await getLineupByThread(message.channel.id);
+    let lineup;
+    try {
+      lineup = await getLineupByThread(message.channel.id);
+    } catch (err) {
+      console.error('[loot-sold-screenshot] lineup lookup failed:', err.message);
+      return;
+    }
     if (!lineup || lineup.loot_thread_id !== message.channel.id) return;
-
-    const unsold = (await getLootRows(lineup.id)).filter(l => !l.sold);
 
     await message.react('⏳').catch(() => {});
     try {
+      const unsold = (await getLootRows(lineup.id)).filter(l => !l.sold);
+
       const response = await fetch(attachment.url);
       const buffer = Buffer.from(await response.arrayBuffer());
       const mimeType = detectMimeType(buffer, attachment.contentType);
