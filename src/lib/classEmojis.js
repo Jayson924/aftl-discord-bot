@@ -55,6 +55,7 @@ const CLASS_EMOJIS = {
   'Soul Eater':     { name: 'SoulEater',      id: '1500201279237132411' },
   'Blade Dancer':   { name: 'BladeDancer',    id: '1500201246051795206' },
   'Spirit Dancer':  { name: 'SpiritDancer',   id: '1500201280134451262' },
+  'Dark Avenger':   { name: 'DarkAvenger',    id: '1521022885626380349' },
 };
 
 /**
