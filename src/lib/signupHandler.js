@@ -188,7 +188,12 @@ async function handle(interaction, client) {
 async function handleJoinClick(interaction, lineupId) {
   const characters = await getCharactersOwnedBy(interaction.user.id);
   const lineup = await getLineupWithPlayers(lineupId);
-  const eligible = characters.filter(c => isCharacterEligible(c, lineup.raid_type));
+  // "Next Week" lineups (is_template) ignore this week's completion — those
+  // clears reset before the lineup runs. Mirrors the web app's lineup editor
+  // (isNextWeek ? true : playerNeedsRaid). Everyone's characters stay eligible.
+  const eligible = lineup.is_template
+    ? characters
+    : characters.filter(c => isCharacterEligible(c, lineup.raid_type));
 
   // Nothing eligible → offer the unregistered/guest path with the right copy.
   if (eligible.length === 0) {
