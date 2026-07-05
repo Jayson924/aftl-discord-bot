@@ -627,8 +627,8 @@ async function postApprovalRequest(interaction, lineupId, character, usesTicket,
 
 async function handleApproveClick(interaction, requestId, client) {
   const adminUser = await getAppUser(interaction.user.id);
-  if (!adminUser || adminUser.role !== 'admin') {
-    return await interaction.reply({ content: 'Only admins can approve sign-ups.', ephemeral: true });
+  if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'editor')) {
+    return await interaction.reply({ content: 'Only admins or editors can approve sign-ups.', ephemeral: true });
   }
 
   const data = stash.get(requestId);
@@ -684,8 +684,8 @@ async function handleApproveClick(interaction, requestId, client) {
 
 async function handleDenyClick(interaction, requestId) {
   const adminUser = await getAppUser(interaction.user.id);
-  if (!adminUser || adminUser.role !== 'admin') {
-    return await interaction.reply({ content: 'Only admins can deny sign-ups.', ephemeral: true });
+  if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'editor')) {
+    return await interaction.reply({ content: 'Only admins or editors can deny sign-ups.', ephemeral: true });
   }
   stash.delete(requestId);
   await respondTo(interaction, {
