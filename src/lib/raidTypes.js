@@ -36,7 +36,7 @@ function getRaidColor(raidType) {
   switch (raidType) {
     case 'Hardcore':     return 0x2d6a3a; // GDN — deep forest
     case 'Classic':      return 0x5b9c3e; // GDN — leaf
-    case 'DDN Hardcore': return 0xa06430; // DDN — dark sand (unreleased)
+    case 'DDN Hardcore': return 0xa06430; // DDN — dark sand
     case 'DDN Classic':  return 0xc69257; // DDN — sand
     case 'DDN Normal':   return 0xd9b07c; // DDN — pale dune
     case '4-man':        return 0x7f8c8d; // neutral grey
@@ -120,12 +120,11 @@ function isCharacterEligible(character, raidType) {
 }
 
 // Slash command choice list. Order matches the web app's selectors.
-// DDN Hardcore is omitted from user-facing choices because the raid is
-// unreleased — the data layer still supports it for future activation.
 // DDN Normal / 4-man were retired from the web selectors; the data layer
 // keeps mapping them for any legacy lineup rows.
 const RAID_TYPE_CHOICES = [
   { name: 'DDN Classic', value: 'DDN Classic' },
+  { name: 'DDN Hardcore', value: 'DDN Hardcore' },
   { name: 'GDN Hardcore', value: 'Hardcore' },
   { name: 'GDN Classic', value: 'Classic' },
 ];
