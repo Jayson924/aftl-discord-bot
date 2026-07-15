@@ -123,8 +123,8 @@ function isCharacterEligible(character, raidType) {
 // DDN Normal / 4-man were retired from the web selectors; the data layer
 // keeps mapping them for any legacy lineup rows.
 const RAID_TYPE_CHOICES = [
-  { name: 'DDN Classic', value: 'DDN Classic' },
   { name: 'DDN Hardcore', value: 'DDN Hardcore' },
+  { name: 'DDN Classic', value: 'DDN Classic' },
   { name: 'GDN Hardcore', value: 'Hardcore' },
   { name: 'GDN Classic', value: 'Classic' },
 ];
