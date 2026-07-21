@@ -1,4 +1,4 @@
-const { Client, Collection, GatewayIntentBits } = require('discord.js');
+const { Client, Collection, GatewayIntentBits, Partials } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
 require('dotenv').config();
@@ -8,6 +8,7 @@ const { startRaidRoleScheduler } = require('./lib/raidRoleScheduler');
 const { startNewUserNotifier, handleNewUserButton } = require('./lib/newUserNotifier');
 const { startNewCharacterNotifier, handleNewCharacterButton } = require('./lib/newCharacterNotifier');
 const { startLootSync } = require('./lib/lootThread');
+const { startPayoutSync, startLootCloseSweeper } = require('./lib/lootPayout');
 const signupHandler = require('./lib/signupHandler');
 
 // Global safety nets — a thrown error in one event/handler must NEVER take the
@@ -28,7 +29,12 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    // Gold-share ✅ confirmations in loot threads (non-privileged intent).
+    GatewayIntentBits.GuildMessageReactions,
   ],
+  // Reactions can land on messages the bot hasn't cached — receive them as
+  // partials so MessageReactionAdd/Remove still fire (hydrated in the handler).
+  partials: [Partials.Message, Partials.Reaction, Partials.Channel],
 });
 
 // Load commands
@@ -67,6 +73,8 @@ client.once('ready', () => {
   startNewUserNotifier(client);
   startNewCharacterNotifier(client);
   startLootSync(client);
+  startPayoutSync(client);
+  startLootCloseSweeper(client);
 });
 
 client.on('interactionCreate', async (interaction) => {

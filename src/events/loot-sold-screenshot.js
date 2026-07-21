@@ -14,7 +14,7 @@
 const { Events } = require('discord.js');
 const {
   fmtGold,
-  getLineupByThread,
+  resolveParentByThread,
   getLootRows,
   getRosterDisplay,
   updateLootEntry,
@@ -129,19 +129,19 @@ module.exports = {
     const attachment = message.attachments.find(a => a.contentType?.startsWith('image/'));
     if (!attachment) return;
 
-    // Must be a linked loot thread.
-    let lineup;
+    // Must be a linked loot thread (live lineup or archived loot record).
+    let parent;
     try {
-      lineup = await getLineupByThread(message.channel.id);
+      parent = await resolveParentByThread(message.channel.id);
     } catch (err) {
-      console.error('[loot-sold-screenshot] lineup lookup failed:', err.message);
+      console.error('[loot-sold-screenshot] parent lookup failed:', err.message);
       return;
     }
-    if (!lineup || lineup.loot_thread_id !== message.channel.id) return;
+    if (!parent || parent.lootThreadId !== message.channel.id) return;
 
     await message.react('⏳').catch(() => {});
     try {
-      const unsold = (await getLootRows(lineup.id)).filter(l => !l.sold);
+      const unsold = (await getLootRows(parent)).filter(l => !l.sold);
 
       const response = await fetch(attachment.url);
       const buffer = Buffer.from(await response.arrayBuffer());
@@ -169,13 +169,13 @@ module.exports = {
       }
 
       // The poster is the seller → they become the holder.
-      const rosterDisplay = await getRosterDisplay(lineup.id, lineup.raid_type);
+      const rosterDisplay = await getRosterDisplay(parent);
       const sellerName = rosterDisplay.find(r => r.discordId === message.author.id)?.name
         || message.member?.displayName
         || message.author.username;
 
       await updateLootEntry(row.id, { sold: true, price: gold, heldBy: sellerName });
-      await updateLootMessage(message.client, lineup.id);
+      await updateLootMessage(message.client, parent);
       await message.react('✅').catch(() => {});
       await message.reply(`💰 **${row.item}** marked sold for 🪙 **${fmtGold(gold)}** — held by **${sellerName}**.`);
     } catch (err) {

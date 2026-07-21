@@ -33,74 +33,189 @@ function partyDisplayName(rawName) {
 }
 
 // ============================================
+// LOOT PARENT ABSTRACTION  (live lineup OR archived loot record)
+// ============================================
+// After a lineup is archived (see the web app's loot-records.sql), its loot +
+// payout rows are re-parented onto a `loot_records` row (record_id set, lineup_id
+// nulled) and the lineup is deleted — but the Discord loot thread lives on, its
+// ids carried onto the record. So loot/payout logic must work against EITHER
+// parent. A "parent" normalizes both into one shape:
+//   { kind:'lineup'|'record', id, name, raidType, threadId, lootThreadId,
+//     lootMessageId, payoutMessageId, lootCloseAt, lootClosed, rosterSnapshot }
+// `threadId` (raid thread) + live roster are lineup-only; records carry a frozen
+// `rosterSnapshot` (resolved member names) instead.
+
+const LINEUP_COLS = 'id, name, raid_type, thread_id, loot_thread_id, loot_message_id, payout_message_id, loot_close_at, loot_closed';
+const RECORD_COLS = 'id, lineup_name, raid_type, roster, loot_thread_id, loot_message_id, payout_message_id, loot_close_at, loot_closed';
+
+function normalizeLineup(row) {
+  if (!row) return null;
+  return {
+    kind: 'lineup',
+    id: row.id,
+    name: row.name,
+    raidType: row.raid_type,
+    threadId: row.thread_id || null,
+    lootThreadId: row.loot_thread_id || null,
+    lootMessageId: row.loot_message_id || null,
+    payoutMessageId: row.payout_message_id || null,
+    lootCloseAt: row.loot_close_at || null,
+    lootClosed: row.loot_closed === true,
+    rosterSnapshot: null,
+  };
+}
+
+function normalizeRecord(row) {
+  if (!row) return null;
+  return {
+    kind: 'record',
+    id: row.id,
+    name: row.lineup_name,
+    raidType: row.raid_type,
+    threadId: null,
+    lootThreadId: row.loot_thread_id || null,
+    lootMessageId: row.loot_message_id || null,
+    payoutMessageId: row.payout_message_id || null,
+    lootCloseAt: row.loot_close_at || null,
+    lootClosed: row.loot_closed === true,
+    rosterSnapshot: Array.isArray(row.roster) ? row.roster.filter(Boolean) : [],
+  };
+}
+
+// Which loot/payout column parents this kind, e.g. 'lineup_id' vs 'record_id'.
+const parentCol = (parent) => (parent.kind === 'record' ? 'record_id' : 'lineup_id');
+
+// Turn a loose arg into a { lineupId } / { recordId } ref.
+function toRef(parentOrId) {
+  if (parentOrId && typeof parentOrId === 'object' && parentOrId.kind) {
+    return parentOrId.kind === 'record' ? { recordId: parentOrId.id } : { lineupId: parentOrId.id };
+  }
+  return { lineupId: parentOrId }; // legacy: a bare lineup id
+}
+
+// Coerce a loose arg into a parent WITHOUT a DB round-trip: full parent passes
+// through; a legacy (lineupId, raidType) makes a lite lineup parent. Used by the
+// read helpers whose callers already hold the parent (or a live lineup id).
+function asParent(parentOrId, raidType) {
+  if (parentOrId && typeof parentOrId === 'object' && parentOrId.kind) return parentOrId;
+  return { kind: 'lineup', id: parentOrId, raidType, rosterSnapshot: null };
+}
+
+// Fetch a fresh, full parent by ref (used where up-to-date bookkeeping matters).
+async function resolveParentById({ lineupId, recordId } = {}) {
+  if (lineupId) {
+    const { data, error } = await supabase.from('lineups').select(LINEUP_COLS).eq('id', lineupId).maybeSingle();
+    if (error) { console.error('[loot] resolveParentById(lineup) failed:', error.message); return null; }
+    return normalizeLineup(data);
+  }
+  if (recordId) {
+    const { data, error } = await supabase.from('loot_records').select(RECORD_COLS).eq('id', recordId).maybeSingle();
+    if (error) { console.error('[loot] resolveParentById(record) failed:', error.message); return null; }
+    return normalizeRecord(data);
+  }
+  return null;
+}
+
+// Resolve by Discord thread — matches a live lineup's loot/raid thread first,
+// then a loot record's thread. Lets `/loot` work in archived loot threads too.
+async function resolveParentByThread(threadId) {
+  if (!threadId) return null;
+  const { data: lineup } = await supabase
+    .from('lineups').select(LINEUP_COLS)
+    .or(`loot_thread_id.eq.${threadId},thread_id.eq.${threadId}`)
+    .limit(1).maybeSingle();
+  if (lineup) return normalizeLineup(lineup);
+  const { data: record } = await supabase
+    .from('loot_records').select(RECORD_COLS)
+    .eq('loot_thread_id', threadId).limit(1).maybeSingle();
+  return normalizeRecord(record);
+}
+
+// Resolve by the payout confirm message's id (live lineup first, then record).
+async function resolveParentByPayoutMessage(messageId) {
+  if (!messageId) return null;
+  const { data: lineup } = await supabase
+    .from('lineups').select(LINEUP_COLS).eq('payout_message_id', messageId).maybeSingle();
+  if (lineup) return normalizeLineup(lineup);
+  const { data: record } = await supabase
+    .from('loot_records').select(RECORD_COLS).eq('payout_message_id', messageId).maybeSingle();
+  return normalizeRecord(record);
+}
+
+// A loot/payout realtime row carries exactly one of lineup_id / record_id.
+function refFromLootPayload(payload) {
+  const row = payload.new || payload.old || {};
+  if (row.record_id) return { recordId: row.record_id };
+  if (row.lineup_id) return { lineupId: row.lineup_id };
+  return null;
+}
+
+// Update a parent's loot-thread bookkeeping (payout_message_id, close window…) on
+// whichever table backs it.
+async function updateParentBookkeeping(parent, patch) {
+  const table = parent.kind === 'record' ? 'loot_records' : 'lineups';
+  const { error } = await supabase.from(table).update(patch).eq('id', parent.id);
+  if (error) console.error('[loot] bookkeeping update failed:', error.message);
+}
+
+// ============================================
 // DATA HELPERS
 // ============================================
 
-// Find the lineup for a Discord thread — matches either the loot thread or the
-// raid thread, so `/loot` works in either.
-async function getLineupByThread(threadId) {
-  if (!threadId) return null;
-  const { data, error } = await supabase
-    .from('lineups')
-    .select('id, name, raid_type, loot_thread_id, loot_message_id, thread_id')
-    .or(`loot_thread_id.eq.${threadId},thread_id.eq.${threadId}`)
-    .limit(1)
-    .maybeSingle();
-  if (error) {
-    console.error('[loot] getLineupByThread failed:', error.message);
-    return null;
-  }
-  return data;
+// Back-compat aliases (live-lineup callers): resolve a parent by thread / id.
+const getLineupByThread = resolveParentByThread;
+async function getLineupForLoot(lineupId) {
+  return resolveParentById({ lineupId });
 }
 
-async function getLineupForLoot(lineupId) {
-  const { data, error } = await supabase
-    .from('lineups')
-    .select('id, name, raid_type, thread_id, loot_thread_id, loot_message_id')
-    .eq('id', lineupId)
-    .maybeSingle();
-  if (error) {
-    console.error('[loot] getLineupForLoot failed:', error.message);
-    return null;
+// Attach owner discord ids to display rows. `lookupName` is what we match against
+// players.name (raw player_name for lineups, resolved name for records — they're
+// equal for real characters; guests match nothing, so stay unlinked).
+async function attachDiscordIds(displayRows) {
+  const lookup = [...new Set(displayRows.map(r => r.lookupName).filter(Boolean))];
+  const map = {};
+  if (lookup.length > 0) {
+    const { data: players } = await supabase.from('players').select('name, discord_id').in('name', lookup);
+    for (const p of players || []) if (p.discord_id) map[p.name] = p.discord_id;
   }
-  return data;
+  return displayRows.map(r => ({ name: r.name, discordId: map[r.lookupName] || null }));
 }
 
 // Ordered roster for the embed: display name + owner discord id (for clickable,
-// non-pinging mentions), in slot order. Used for the roster section, the payout
-// count, and holder grouping order.
-async function getRosterDisplay(lineupId, raidType) {
+// non-pinging mentions), in slot order. Accepts a parent, a full parent object,
+// or a legacy (lineupId, raidType). Records use their frozen roster snapshot.
+async function getRosterDisplay(parentOrId, raidType) {
+  const parent = asParent(parentOrId, raidType);
+
+  if (parent.kind === 'record') {
+    const names = Array.isArray(parent.rosterSnapshot) ? parent.rosterSnapshot.filter(Boolean) : [];
+    return attachDiscordIds(names.map(n => ({ name: n, lookupName: n })));
+  }
+
   const { data: lineupPlayers } = await supabase
     .from('lineup_players')
     .select('player_name, slot_position')
-    .eq('lineup_id', lineupId)
+    .eq('lineup_id', parent.id)
     .order('slot_position');
-  const size = getLineupSize(raidType);
+  const size = getLineupSize(parent.raidType);
   const rows = (lineupPlayers || []).slice(0, size).filter(lp => lp.player_name);
-
-  const names = rows.map(lp => lp.player_name);
-  const discordMap = {};
-  if (names.length > 0) {
-    const { data: players } = await supabase.from('players').select('name, discord_id').in('name', names);
-    for (const p of players || []) if (p.discord_id) discordMap[p.name] = p.discord_id;
-  }
-
-  return rows.map(lp => ({
+  return attachDiscordIds(rows.map(lp => ({
     name: partyDisplayName(lp.player_name),
-    discordId: discordMap[lp.player_name] || null,
-  }));
+    lookupName: lp.player_name,
+  })));
 }
 
 // Just the ordered display names (for autocomplete / grouping).
-async function getRoster(lineupId, raidType) {
-  return (await getRosterDisplay(lineupId, raidType)).map(r => r.name);
+async function getRoster(parentOrId, raidType) {
+  return (await getRosterDisplay(parentOrId, raidType)).map(r => r.name);
 }
 
-async function getLootRows(lineupId) {
+async function getLootRows(parentOrId) {
+  const parent = asParent(parentOrId);
   const { data, error } = await supabase
     .from('lineup_loot')
     .select('id, item, sold, price, sort_order, held_by, source')
-    .eq('lineup_id', lineupId)
+    .eq(parentCol(parent), parent.id)
     .order('sort_order');
   if (error) {
     console.error('[loot] getLootRows failed:', error.message);
@@ -117,27 +232,31 @@ async function getLootRows(lineupId) {
   }));
 }
 
-async function insertLootEntry(lineupId, { item, sold = false, price = 0, heldBy = '', createdBy = null }) {
+async function insertLootEntry(parentOrId, { item, sold = false, price = 0, heldBy = '', createdBy = null }) {
+  const parent = asParent(parentOrId);
+  const col = parentCol(parent);
   const { data: existing } = await supabase
     .from('lineup_loot')
     .select('sort_order')
-    .eq('lineup_id', lineupId)
+    .eq(col, parent.id)
     .order('sort_order', { ascending: false })
     .limit(1);
   const nextOrder = (existing?.[0]?.sort_order ?? -1) + 1;
 
+  const row = {
+    item: item.trim(),
+    sold: !!sold,
+    price: sold ? Math.max(0, Math.round(Number(price) || 0)) : 0,
+    sort_order: nextOrder,
+    held_by: (heldBy || '').trim() || null,
+    source: 'discord',
+    created_by: createdBy || null,
+  };
+  row[col] = parent.id;
+
   const { data, error } = await supabase
     .from('lineup_loot')
-    .insert({
-      lineup_id: lineupId,
-      item: item.trim(),
-      sold: !!sold,
-      price: sold ? Math.max(0, Math.round(Number(price) || 0)) : 0,
-      sort_order: nextOrder,
-      held_by: (heldBy || '').trim() || null,
-      source: 'discord',
-      created_by: createdBy || null,
-    })
+    .insert(row)
     .select('id')
     .single();
   if (error) throw error;
@@ -265,22 +384,25 @@ function buildLootEmbed(lineup, lootRows, rosterDisplay, { raidThreadId } = {}) 
 // ============================================
 
 // Rebuild + edit the loot thread's original (roster + loot) message from DB state.
-async function updateLootMessage(client, lineupId) {
-  const lineup = await getLineupForLoot(lineupId);
-  if (!lineup || !lineup.loot_thread_id || !lineup.loot_message_id) return;
+// Accepts a parent object, a legacy lineup id, or a { recordId } ref — always
+// re-resolves fresh so bookkeeping (thread/message ids) is current.
+async function updateLootMessage(client, parentOrId) {
+  const parent = await resolveParentById(toRef(parentOrId));
+  if (!parent || !parent.lootThreadId || !parent.lootMessageId) return;
 
   const [lootRows, rosterDisplay] = await Promise.all([
-    getLootRows(lineupId),
-    getRosterDisplay(lineupId, lineup.raid_type),
+    getLootRows(parent),
+    getRosterDisplay(parent),
   ]);
 
-  const thread = await client.channels.fetch(lineup.loot_thread_id).catch(() => null);
+  const thread = await client.channels.fetch(parent.lootThreadId).catch(() => null);
   if (!thread) return;
-  const message = await thread.messages.fetch(lineup.loot_message_id).catch(() => null);
+  const message = await thread.messages.fetch(parent.lootMessageId).catch(() => null);
   if (!message) return;
 
+  const embedLineup = { name: parent.name, raid_type: parent.raidType };
   await message
-    .edit({ embeds: [buildLootEmbed(lineup, lootRows, rosterDisplay, { raidThreadId: lineup.thread_id })] })
+    .edit({ embeds: [buildLootEmbed(embedLineup, lootRows, rosterDisplay, { raidThreadId: parent.threadId })] })
     .catch(err => console.error('[loot] message edit failed:', err.message));
 }
 
@@ -289,18 +411,29 @@ async function updateLootMessage(client, lineupId) {
 // ============================================
 
 function startLootSync(client) {
-  // Coalesce bursts of changes to the same lineup into one embed edit.
+  // Coalesce bursts of changes to the same parent into one embed edit. Keyed by
+  // the parent's loot/payout column value (lineup id or record id).
   const pending = new Map();
-  const schedule = (lineupId) => {
-    if (!lineupId) return;
-    if (pending.has(lineupId)) clearTimeout(pending.get(lineupId));
+  const schedule = (ref) => {
+    if (!ref) return;
+    const key = ref.recordId || ref.lineupId;
+    if (!key) return;
+    if (pending.has(key)) clearTimeout(pending.get(key));
     pending.set(
-      lineupId,
+      key,
       setTimeout(() => {
-        pending.delete(lineupId);
-        updateLootMessage(client, lineupId).catch(err =>
-          console.error('[loot] sync update failed:', err.message)
-        );
+        pending.delete(key);
+        updateLootMessage(client, ref)
+          .catch(err => console.error('[loot] sync update failed:', err.message))
+          .finally(() => {
+            // Once loot changes settle, (re)build the payout confirm message.
+            // Lazy require avoids a circular dependency (lootPayout needs lootThread).
+            try {
+              require('./lootPayout').onLootChanged(client, ref);
+            } catch (err) {
+              console.error('[loot] payout hook failed:', err.message);
+            }
+          });
       }, 400)
     );
   };
@@ -310,10 +443,7 @@ function startLootSync(client) {
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'lineup_loot' },
-      (payload) => {
-        const lineupId = payload.new?.lineup_id || payload.old?.lineup_id;
-        schedule(lineupId);
-      }
+      (payload) => schedule(refFromLootPayload(payload))
     )
     .subscribe((status) => console.log('[loot] lineup_loot sync channel:', status));
 }
@@ -321,6 +451,15 @@ function startLootSync(client) {
 module.exports = {
   fmtGold,
   partyDisplayName,
+  // parent abstraction (lineup ⇄ loot record)
+  resolveParentById,
+  resolveParentByThread,
+  resolveParentByPayoutMessage,
+  refFromLootPayload,
+  updateParentBookkeeping,
+  parentCol,
+  toRef,
+  // back-compat aliases
   getLineupByThread,
   getLineupForLoot,
   getRosterDisplay,

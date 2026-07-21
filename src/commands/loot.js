@@ -13,7 +13,7 @@
 const { SlashCommandBuilder } = require('discord.js');
 const {
   fmtGold,
-  getLineupByThread,
+  resolveParentByThread,
   getRoster,
   getRosterDisplay,
   getLootRows,
@@ -72,13 +72,13 @@ module.exports = {
 
   async autocomplete(interaction) {
     const focused = interaction.options.getFocused(true);
-    const lineup = await getLineupByThread(interaction.channel?.id);
-    if (!lineup) return interaction.respond([]);
+    const parent = await resolveParentByThread(interaction.channel?.id);
+    if (!parent) return interaction.respond([]);
 
     const query = (focused.value || '').toLowerCase();
 
     if (focused.name === 'holder') {
-      const roster = await getRoster(lineup.id, lineup.raid_type);
+      const roster = await getRoster(parent);
       const choices = roster
         .filter(n => n.toLowerCase().includes(query))
         .slice(0, 25)
@@ -88,7 +88,7 @@ module.exports = {
 
     if (focused.name === 'item') {
       const sub = interaction.options.getSubcommand();
-      let rows = await getLootRows(lineup.id);
+      let rows = await getLootRows(parent);
       if (sub === 'sold') rows = rows.filter(l => !l.sold); // only unsold can be marked sold
       const choices = rows
         .filter(l => l.item.toLowerCase().includes(query))
@@ -109,10 +109,11 @@ module.exports = {
       return interaction.reply({ content: 'Use `/loot` inside a raid or loot thread.', ephemeral: true });
     }
 
-    const lineup = await getLineupByThread(interaction.channel.id);
-    if (!lineup) {
-      return interaction.reply({ content: 'No lineup is linked to this thread.', ephemeral: true });
+    const parent = await resolveParentByThread(interaction.channel.id);
+    if (!parent) {
+      return interaction.reply({ content: 'No lineup or loot record is linked to this thread.', ephemeral: true });
     }
+    const embedLineup = { name: parent.name, raid_type: parent.raidType };
 
     const sub = interaction.options.getSubcommand();
 
@@ -122,8 +123,8 @@ module.exports = {
         const holder = interaction.options.getString('holder')?.trim() || '';
         if (!item) return interaction.reply({ content: 'Item name is required.', ephemeral: true });
 
-        await insertLootEntry(lineup.id, { item, heldBy: holder, createdBy: interaction.user.id });
-        await updateLootMessage(interaction.client, lineup.id);
+        await insertLootEntry(parent, { item, heldBy: holder, createdBy: interaction.user.id });
+        await updateLootMessage(interaction.client, parent);
         return interaction.reply(
           `➕ Logged **${item}**${holder ? ` — held by **${holder}**` : ''} _(unsold)_.`
         );
@@ -133,8 +134,8 @@ module.exports = {
         const value = interaction.options.getString('item');
         const price = interaction.options.getInteger('price');
         const [rows, rosterDisplay] = await Promise.all([
-          getLootRows(lineup.id),
-          getRosterDisplay(lineup.id, lineup.raid_type),
+          getLootRows(parent),
+          getRosterDisplay(parent),
         ]);
         const row = resolveLootRow(rows, value, { unsoldOnly: true });
         if (!row) {
@@ -146,29 +147,29 @@ module.exports = {
           || interaction.member?.displayName
           || interaction.user.username;
         await updateLootEntry(row.id, { sold: true, price, heldBy: sellerName });
-        await updateLootMessage(interaction.client, lineup.id);
+        await updateLootMessage(interaction.client, parent);
         return interaction.reply(`💰 **${row.item}** sold for 🪙 **${fmtGold(price)}** — held by **${sellerName}**.`);
       }
 
       if (sub === 'remove') {
         const value = interaction.options.getString('item');
-        const rows = await getLootRows(lineup.id);
+        const rows = await getLootRows(parent);
         const row = resolveLootRow(rows, value);
         if (!row) {
           return interaction.reply({ content: `Couldn't find a loot entry matching that. Pick one from the list.`, ephemeral: true });
         }
         await deleteLootEntry(row.id);
-        await updateLootMessage(interaction.client, lineup.id);
+        await updateLootMessage(interaction.client, parent);
         return interaction.reply(`🗑️ Removed **${row.item}**.`);
       }
 
       if (sub === 'list') {
         const [rows, rosterDisplay] = await Promise.all([
-          getLootRows(lineup.id),
-          getRosterDisplay(lineup.id, lineup.raid_type),
+          getLootRows(parent),
+          getRosterDisplay(parent),
         ]);
         return interaction.reply({
-          embeds: [buildLootEmbed(lineup, rows, rosterDisplay, { raidThreadId: lineup.thread_id })],
+          embeds: [buildLootEmbed(embedLineup, rows, rosterDisplay, { raidThreadId: parent.threadId })],
           ephemeral: true,
         });
       }
