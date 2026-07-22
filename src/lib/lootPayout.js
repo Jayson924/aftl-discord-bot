@@ -42,16 +42,17 @@ function escapeMd(str) {
 async function getPayoutRows(parent) {
   const { data, error } = await supabase
     .from('lineup_payouts')
-    .select('member_name, discord_id')
+    .select('member_name, discord_id, amount')
     .eq(parentCol(parent), parent.id);
   if (error) {
     console.error('[payout] getPayoutRows failed:', error.message);
     return [];
   }
-  return data || [];
+  return (data || []).map(p => ({ ...p, amount: Number(p.amount) || 0 }));
 }
 
-async function upsertPayout(parent, memberName, discordId) {
+// `amount` = the gold this member has now withdrawn (the current per-person share).
+async function upsertPayout(parent, memberName, discordId, amount = 0) {
   const col = parentCol(parent);
   const row = {
     member_name: memberName,
@@ -59,6 +60,7 @@ async function upsertPayout(parent, memberName, discordId) {
     source: 'discord',
     created_by: discordId || null,
     received_at: new Date().toISOString(),
+    amount: Math.max(0, Math.round(Number(amount) || 0)),
   };
   row[col] = parent.id;
   const { error } = await supabase
@@ -66,6 +68,18 @@ async function upsertPayout(parent, memberName, discordId) {
     .upsert(row, { onConflict: `${col},member_name` });
   if (error) throw error;
 }
+
+// Compute the current per-person payout for a parent from its sold loot.
+async function computePayoutEach(parent, partySize) {
+  const lootRows = await getLootRows(parent);
+  const total = lootRows.reduce((s, l) => s + (l.sold ? l.price : 0), 0);
+  return partySize > 0 ? Math.floor(total / partySize) : 0;
+}
+
+// Suppress the payout-deletion that a bot-initiated reaction removal would
+// otherwise trigger (we remove stale ✅ during a top-up but keep the amount).
+const suppressedRemovals = new Set();
+const removalKey = (messageId, userId) => `${messageId}:${userId}`;
 
 async function deletePayoutsForMembers(parent, memberNames) {
   if (!memberNames.length) return;
@@ -81,23 +95,42 @@ async function deletePayoutsForMembers(parent, memberNames) {
 // MESSAGE CONTENT
 // ============================================
 
-function buildPayoutContent(rosterDisplay, paidSet, total, payoutEach, closeAt, closed) {
+// `paidMap` = Map(member_name → gold withdrawn). A member is settled when they've
+// withdrawn >= the current payoutEach; "partial" when they withdrew a smaller
+// prior share and now owe the difference (a forgotten item was sold after they
+// confirmed).
+function memberPayState(name, paidMap, payoutEach) {
+  if (!paidMap.has(name)) return { settled: false, partial: false, withdrawn: 0 };
+  const w = paidMap.get(name);
+  if (w >= payoutEach) return { settled: true, partial: false, withdrawn: w };
+  if (w > 0) return { settled: false, partial: true, withdrawn: w };
+  return { settled: false, partial: false, withdrawn: 0 };
+}
+
+function buildPayoutContent(rosterDisplay, paidMap, total, payoutEach, closeAt, closed) {
   const partySize = rosterDisplay.length;
   const linked = rosterDisplay.filter(r => r.discordId);
 
   const lines = linked.map(m => {
-    const done = paidSet.has(m.name);
-    const label = done ? `~~${escapeMd(m.name)}~~` : `**${escapeMd(m.name)}**`;
-    return `${done ? '✅' : '⬜'} ${label} — <@${m.discordId}>`;
+    const st = memberPayState(m.name, paidMap, payoutEach);
+    if (st.settled) return `✅ ~~${escapeMd(m.name)}~~ — <@${m.discordId}>`;
+    if (st.partial) {
+      const owed = Math.max(0, payoutEach - st.withdrawn);
+      return `🔸 **${escapeMd(m.name)}** — <@${m.discordId}> · already withdrew 🪙 ${fmtGold(st.withdrawn)}, grab **+🪙 ${fmtGold(owed)}**`;
+    }
+    return `⬜ **${escapeMd(m.name)}** — <@${m.discordId}>`;
   });
-  // Guests / unlinked members an editor marked paid on the website
+  // Guests / unlinked members an editor marked paid on the website (settled only)
   const extras = rosterDisplay
-    .filter(r => !r.discordId && paidSet.has(r.name))
+    .filter(r => !r.discordId && memberPayState(r.name, paidMap, payoutEach).settled)
     .map(m => `✅ ~~${escapeMd(m.name)}~~ _(guest)_`);
 
+  const anyPartial = linked.some(m => memberPayState(m.name, paidMap, payoutEach).partial);
   const header =
     `💰 **Loot sold — 🪙 ${fmtGold(total)} total · 🪙 ${fmtGold(payoutEach)} each** _(÷${partySize})_\n` +
-    `React ${PAYOUT_EMOJI} once you've received your gold share.`;
+    (anyPartial
+      ? `More loot was sold. If you already got your earlier share, just grab the **+difference** shown below, then re-react ${PAYOUT_EMOJI}.`
+      : `React ${PAYOUT_EMOJI} once you've received your gold share.`);
 
   const body = [...lines, ...extras].join('\n') || '_no linked party members_';
 
@@ -143,20 +176,25 @@ async function refreshPayoutState(client, ref, { canPost = false } = {}) {
   // Nothing to do yet: no message and either not allowed to post or not all sold.
   if (!hasMessage && (!canPost || !shouldExist)) return;
 
-  const paidSet = new Set(payoutRows.map(p => p.member_name));
-  // "Everyone reacted" = every LINKED member (owned by a Discord account) confirmed.
+  // name → gold withdrawn. Settled = withdrew >= the current payout-each.
+  const paidMap = new Map(payoutRows.map(p => [p.member_name, p.amount]));
+  const isSettled = (name) => paidMap.has(name) && paidMap.get(name) >= payoutEach;
   const linked = rosterDisplay.filter(r => r.discordId);
-  const allConfirmed = linked.length > 0 && linked.every(m => paidSet.has(m.name));
+  const allConfirmed = linked.length > 0 && linked.every(m => isSettled(m.name));
+  // Only close once everything's actually sold AND everyone's settled at the
+  // current share. A forgotten item raising the share re-opens things.
+  const readyToClose = allSold && allConfirmed;
 
   // Manage the 3-hour auto-close window.
   let closeAt = parent.lootCloseAt ? new Date(parent.lootCloseAt) : null;
   const updates = {};
   if (!parent.lootClosed) {
-    if (allConfirmed && !closeAt) {
+    if (readyToClose && !closeAt) {
       closeAt = new Date(Date.now() + CLOSE_DELAY_MS);
       updates.loot_close_at = closeAt.toISOString();
-    } else if (!allConfirmed && closeAt) {
-      // Someone un-confirmed (or a new linked member appeared) — cancel the close.
+    } else if (!readyToClose && closeAt) {
+      // Un-confirmed, a new linked member appeared, or new loot raised the share —
+      // cancel the pending close.
       closeAt = null;
       updates.loot_close_at = null;
     }
@@ -165,21 +203,22 @@ async function refreshPayoutState(client, ref, { canPost = false } = {}) {
   const thread = await client.channels.fetch(parent.lootThreadId).catch(() => null);
   if (!thread) return;
 
-  const content = buildPayoutContent(rosterDisplay, paidSet, total, payoutEach, closeAt, parent.lootClosed);
+  const content = buildPayoutContent(rosterDisplay, paidMap, total, payoutEach, closeAt, parent.lootClosed);
 
+  let message = null;
   if (!hasMessage) {
     // First time everything's sold: post the confirm message (pings linked
     // members) and seed the ✅ reaction so members can just click it.
-    const msg = await thread
+    message = await thread
       .send({ content, allowedMentions: { parse: ['users'] } })
       .catch(err => { console.error('[payout] send failed:', err.message); return null; });
-    if (!msg) return;
-    await msg.react(PAYOUT_EMOJI).catch(() => {});
-    updates.payout_message_id = msg.id;
+    if (!message) return;
+    await message.react(PAYOUT_EMOJI).catch(() => {});
+    updates.payout_message_id = message.id;
   } else {
-    const msg = await thread.messages.fetch(parent.payoutMessageId).catch(() => null);
-    if (msg) {
-      await msg
+    message = await thread.messages.fetch(parent.payoutMessageId).catch(() => null);
+    if (message) {
+      await message
         .edit({ content, allowedMentions: { parse: [] } })
         .catch(err => console.error('[payout] edit failed:', err.message));
     }
@@ -187,6 +226,24 @@ async function refreshPayoutState(client, ref, { canPost = false } = {}) {
 
   if (Object.keys(updates).length) {
     await updateParentBookkeeping(parent, updates);
+  }
+
+  // A forgotten item was sold after some members confirmed → they're now "partial"
+  // (withdrew a smaller prior share). Remove their stale ✅ so they must re-react
+  // for the top-up. Guarded so this removal doesn't wipe their recorded amount.
+  if (message && !parent.lootClosed) {
+    const reaction = message.reactions.cache.get(PAYOUT_EMOJI);
+    if (reaction) {
+      for (const m of linked) {
+        const st = memberPayState(m.name, paidMap, payoutEach);
+        if (st.partial) {
+          const key = removalKey(message.id, m.discordId);
+          suppressedRemovals.add(key);
+          await reaction.users.remove(m.discordId).catch(() => {});
+          setTimeout(() => suppressedRemovals.delete(key), 5000);
+        }
+      }
+    }
   }
 }
 
@@ -220,6 +277,10 @@ async function handlePayoutReaction(reaction, user, added) {
   const messageId = reaction.message?.id;
   if (!messageId) return;
 
+  // Ignore removals the bot itself made to reset a stale ✅ (top-up) — those must
+  // NOT wipe the member's recorded withdrawn amount.
+  if (!added && suppressedRemovals.has(removalKey(messageId, user.id))) return;
+
   // The payout message belongs to a live lineup or an archived loot record.
   const parent = await resolveParentByPayoutMessage(messageId);
   if (!parent) return; // not a payout message
@@ -230,7 +291,9 @@ async function handlePayoutReaction(reaction, user, added) {
 
   try {
     if (added) {
-      for (const name of myNames) await upsertPayout(parent, name, user.id);
+      // Confirming = they've now withdrawn the full current share.
+      const payoutEach = await computePayoutEach(parent, rosterDisplay.length);
+      for (const name of myNames) await upsertPayout(parent, name, user.id, payoutEach);
     } else {
       await deletePayoutsForMembers(parent, myNames);
     }
