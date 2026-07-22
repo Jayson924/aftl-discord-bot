@@ -87,8 +87,14 @@ const parentCol = (parent) => (parent.kind === 'record' ? 'record_id' : 'lineup_
 
 // Turn a loose arg into a { lineupId } / { recordId } ref.
 function toRef(parentOrId) {
-  if (parentOrId && typeof parentOrId === 'object' && parentOrId.kind) {
-    return parentOrId.kind === 'record' ? { recordId: parentOrId.id } : { lineupId: parentOrId.id };
+  if (parentOrId && typeof parentOrId === 'object') {
+    // A full parent object (carries .kind + .id)
+    if (parentOrId.kind) {
+      return parentOrId.kind === 'record' ? { recordId: parentOrId.id } : { lineupId: parentOrId.id };
+    }
+    // Already a ref ({ lineupId } / { recordId }) — pass it through
+    if (parentOrId.recordId) return { recordId: parentOrId.recordId };
+    if (parentOrId.lineupId) return { lineupId: parentOrId.lineupId };
   }
   return { lineupId: parentOrId }; // legacy: a bare lineup id
 }
