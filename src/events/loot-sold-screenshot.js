@@ -168,9 +168,9 @@ module.exports = {
         return;
       }
 
-      // The poster is the seller → they become the holder.
+      // The poster is the seller → they become the holder (owner or pilot slot).
       const rosterDisplay = await getRosterDisplay(parent);
-      const sellerName = rosterDisplay.find(r => r.discordId === message.author.id)?.name
+      const sellerName = rosterDisplay.find(r => r.discordId === message.author.id || r.ownerDiscordId === message.author.id)?.name
         || message.member?.displayName
         || message.author.username;
 

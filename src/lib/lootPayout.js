@@ -113,12 +113,13 @@ function buildPayoutContent(rosterDisplay, paidMap, total, payoutEach, closeAt, 
 
   const lines = linked.map(m => {
     const st = memberPayState(m.name, paidMap, payoutEach);
-    if (st.settled) return `✅ ~~${escapeMd(m.name)}~~ — <@${m.discordId}>`;
+    const pilotTag = m.isPilot ? ' _(pilot)_' : '';
+    if (st.settled) return `✅ ~~${escapeMd(m.name)}~~ — <@${m.discordId}>${pilotTag}`;
     if (st.partial) {
       const owed = Math.max(0, payoutEach - st.withdrawn);
-      return `🔸 **${escapeMd(m.name)}** — <@${m.discordId}> · already withdrew 🪙 ${fmtGold(st.withdrawn)}, grab **+🪙 ${fmtGold(owed)}**`;
+      return `🔸 **${escapeMd(m.name)}** — <@${m.discordId}>${pilotTag} · already withdrew 🪙 ${fmtGold(st.withdrawn)}, grab **+🪙 ${fmtGold(owed)}**`;
     }
-    return `⬜ **${escapeMd(m.name)}** — <@${m.discordId}>`;
+    return `⬜ **${escapeMd(m.name)}** — <@${m.discordId}>${pilotTag}`;
   });
   // Guests / unlinked members an editor marked paid on the website (settled only)
   const extras = rosterDisplay
@@ -286,8 +287,12 @@ async function handlePayoutReaction(reaction, user, added) {
   if (!parent) return; // not a payout message
 
   const rosterDisplay = await getRosterDisplay(parent);
-  const myNames = rosterDisplay.filter(r => r.discordId === user.id).map(r => r.name);
-  if (myNames.length === 0) return; // reactor isn't a linked party member
+  // The reactor may be the slot's PILOT (the responsible/tagged person) or its
+  // owner — accept the ✅ from either.
+  const myNames = rosterDisplay
+    .filter(r => r.pilotDiscordId === user.id || r.ownerDiscordId === user.id)
+    .map(r => r.name);
+  if (myNames.length === 0) return; // reactor isn't linked to any party slot
 
   try {
     if (added) {

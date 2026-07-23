@@ -13,6 +13,7 @@
 const { EmbedBuilder } = require('discord.js');
 const supabase = require('../supabase');
 const { getRaidColor, getLineupSize } = require('./raidTypes');
+const { getPilotNameToId } = require('./lineupMentions');
 
 const fmtGold = (n) => (Number(n) || 0).toLocaleString('en-US');
 
@@ -46,7 +47,7 @@ function partyDisplayName(rawName) {
 // `rosterSnapshot` (resolved member names) instead.
 
 const LINEUP_COLS = 'id, name, raid_type, thread_id, loot_thread_id, loot_message_id, payout_message_id, loot_close_at, loot_closed';
-const RECORD_COLS = 'id, lineup_name, raid_type, roster, loot_thread_id, loot_message_id, payout_message_id, loot_close_at, loot_closed';
+const RECORD_COLS = 'id, lineup_name, raid_type, roster, pilots, loot_thread_id, loot_message_id, payout_message_id, loot_close_at, loot_closed';
 
 function normalizeLineup(row) {
   if (!row) return null;
@@ -79,6 +80,7 @@ function normalizeRecord(row) {
     lootCloseAt: row.loot_close_at || null,
     lootClosed: row.loot_closed === true,
     rosterSnapshot: Array.isArray(row.roster) ? row.roster.filter(Boolean) : [],
+    pilotsSnapshot: (row.pilots && typeof row.pilots === 'object') ? row.pilots : {},
   };
 }
 
@@ -178,33 +180,64 @@ async function getLineupForLoot(lineupId) {
   return resolveParentById({ lineupId });
 }
 
-// Attach owner discord ids to display rows. `lookupName` is what we match against
+// Attach discord ids to display rows. `lookupName` is what we match against
 // players.name (raw player_name for lineups, resolved name for records — they're
 // equal for real characters; guests match nothing, so stay unlinked).
+//
+// Pilot-aware: when a slot has a pilot (the person who actually ran the
+// character), the PILOT is the responsible person — `discordId` (the id used for
+// tagging, ✅ expectations, and the close) becomes the pilot's, with the owner as
+// fallback. Both ids are kept so a reaction from either person can be honored.
 async function attachDiscordIds(displayRows) {
   const lookup = [...new Set(displayRows.map(r => r.lookupName).filter(Boolean))];
-  const map = {};
+  const ownerMap = {};
   if (lookup.length > 0) {
     const { data: players } = await supabase.from('players').select('name, discord_id').in('name', lookup);
-    for (const p of players || []) if (p.discord_id) map[p.name] = p.discord_id;
+    for (const p of players || []) if (p.discord_id) ownerMap[p.name] = p.discord_id;
   }
-  return displayRows.map(r => ({ name: r.name, discordId: map[r.lookupName] || null }));
+
+  // Pilot names are display-name strings; resolve via app_users (same convention
+  // as lineupMentions). Only fetched when some slot actually has a pilot.
+  let pilotNameToId = null;
+  if (displayRows.some(r => r.pilotName)) {
+    pilotNameToId = await getPilotNameToId();
+  }
+
+  return displayRows.map(r => {
+    const ownerDiscordId = ownerMap[r.lookupName] || null;
+    const pilotDiscordId = r.pilotName
+      ? (pilotNameToId?.get(r.pilotName.toLowerCase()) || null)
+      : null;
+    return {
+      name: r.name,
+      discordId: pilotDiscordId || ownerDiscordId || null,
+      ownerDiscordId,
+      pilotDiscordId,
+      isPilot: !!(pilotDiscordId && pilotDiscordId !== ownerDiscordId),
+    };
+  });
 }
 
-// Ordered roster for the embed: display name + owner discord id (for clickable,
-// non-pinging mentions), in slot order. Accepts a parent, a full parent object,
-// or a legacy (lineupId, raidType). Records use their frozen roster snapshot.
+// Ordered roster for the embed: display name + responsible discord id (for
+// clickable, non-pinging mentions), in slot order. Accepts a parent, a full
+// parent object, or a legacy (lineupId, raidType). Records use their frozen
+// roster + pilots snapshots.
 async function getRosterDisplay(parentOrId, raidType) {
   const parent = asParent(parentOrId, raidType);
 
   if (parent.kind === 'record') {
     const names = Array.isArray(parent.rosterSnapshot) ? parent.rosterSnapshot.filter(Boolean) : [];
-    return attachDiscordIds(names.map(n => ({ name: n, lookupName: n })));
+    const pilots = parent.pilotsSnapshot || {};
+    return attachDiscordIds(names.map(n => ({
+      name: n,
+      lookupName: n,
+      pilotName: (pilots[n] || '').trim() || null,
+    })));
   }
 
   const { data: lineupPlayers } = await supabase
     .from('lineup_players')
-    .select('player_name, slot_position')
+    .select('player_name, slot_position, pilot_name')
     .eq('lineup_id', parent.id)
     .order('slot_position');
   const size = getLineupSize(parent.raidType);
@@ -212,6 +245,7 @@ async function getRosterDisplay(parentOrId, raidType) {
   return attachDiscordIds(rows.map(lp => ({
     name: partyDisplayName(lp.player_name),
     lookupName: lp.player_name,
+    pilotName: (lp.pilot_name || '').trim() || null,
   })));
 }
 
@@ -342,7 +376,9 @@ function buildLootEmbed(lineup, lootRows, rosterDisplay, { raidThreadId } = {}) 
   const rosterSection = rosterDisplay.length
     ? rosterDisplay
         .map((r, i) => {
-          const who = r.discordId ? `**${escapeMd(r.name)}** — <@${r.discordId}>` : `**${escapeMd(r.name)}**`;
+          const who = r.discordId
+            ? `**${escapeMd(r.name)}** — <@${r.discordId}>${r.isPilot ? ' _(pilot)_' : ''}`
+            : `**${escapeMd(r.name)}**`;
           return `\`${i + 1}.\` ${who}`;
         })
         .join('\n')

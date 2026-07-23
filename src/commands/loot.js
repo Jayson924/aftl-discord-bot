@@ -142,8 +142,8 @@ module.exports = {
           return interaction.reply({ content: `Couldn't find a loot entry matching that. Pick one from the list.`, ephemeral: true });
         }
         // Whoever marks it sold becomes the holder — their roster character if
-        // they're in the party, otherwise their Discord display name.
-        const sellerName = rosterDisplay.find(r => r.discordId === interaction.user.id)?.name
+        // they're in the party (as owner or pilot), otherwise their Discord name.
+        const sellerName = rosterDisplay.find(r => r.discordId === interaction.user.id || r.ownerDiscordId === interaction.user.id)?.name
           || interaction.member?.displayName
           || interaction.user.username;
         await updateLootEntry(row.id, { sold: true, price, heldBy: sellerName });
