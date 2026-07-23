@@ -150,9 +150,13 @@ async function resolveParentByPayoutMessage(messageId) {
 
 // A loot/payout realtime row carries exactly one of lineup_id / record_id.
 function refFromLootPayload(payload) {
-  const row = payload.new || payload.old || {};
-  if (row.record_id) return { recordId: row.record_id };
-  if (row.lineup_id) return { lineupId: row.lineup_id };
+  // Check fields across BOTH images: on DELETE events supabase-js sets `new` to
+  // an EMPTY (but truthy) object and the row data lives in `old` — so never use
+  // `payload.new || payload.old`; that would shadow `old` entirely.
+  const recordId = payload?.new?.record_id || payload?.old?.record_id;
+  if (recordId) return { recordId };
+  const lineupId = payload?.new?.lineup_id || payload?.old?.lineup_id;
+  if (lineupId) return { lineupId };
   return null;
 }
 
