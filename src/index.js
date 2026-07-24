@@ -9,6 +9,7 @@ const { startNewUserNotifier, handleNewUserButton } = require('./lib/newUserNoti
 const { startNewCharacterNotifier, handleNewCharacterButton } = require('./lib/newCharacterNotifier');
 const { startLootSync } = require('./lib/lootThread');
 const { startPayoutSync, startLootCloseSweeper } = require('./lib/lootPayout');
+const { startLootClaimReminders } = require('./lib/lootClaimReminders');
 const signupHandler = require('./lib/signupHandler');
 
 // Global safety nets — a thrown error in one event/handler must NEVER take the
@@ -75,6 +76,7 @@ client.once('ready', () => {
   startLootSync(client);
   startPayoutSync(client);
   startLootCloseSweeper(client);
+  startLootClaimReminders(client);
 });
 
 client.on('interactionCreate', async (interaction) => {

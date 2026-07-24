@@ -20,11 +20,16 @@ const {
   fmtGold,
   resolveParentById,
   resolveParentByPayoutMessage,
+  resolveParentByThread,
   refFromLootPayload,
   updateParentBookkeeping,
   parentCol,
   toRef,
 } = require('./lootThread');
+
+// Stable substring in the daily claim-reminder message (lootClaimReminders.js),
+// used to recognize a ✅ reaction on THAT message and route it like a payout ✅.
+const CLAIM_REMINDER_MARKER = 'Gold still waiting to be claimed';
 
 const PAYOUT_EMOJI = '✅';
 const CLOSE_DELAY_MS = 3 * 60 * 60 * 1000; // 3 hours
@@ -282,9 +287,16 @@ async function handlePayoutReaction(reaction, user, added) {
   // NOT wipe the member's recorded withdrawn amount.
   if (!added && suppressedRemovals.has(removalKey(messageId, user.id))) return;
 
-  // The payout message belongs to a live lineup or an archived loot record.
-  const parent = await resolveParentByPayoutMessage(messageId);
-  if (!parent) return; // not a payout message
+  // The ✅ can be on the payout message itself, or (for convenience) on one of the
+  // bot's daily claim-reminder messages — those resolve via the loot thread.
+  let parent = await resolveParentByPayoutMessage(messageId);
+  if (!parent) {
+    const msg = reaction.message;
+    const isReminder = msg?.author?.id && msg.author.id === client.user?.id
+      && (msg.content || '').includes(CLAIM_REMINDER_MARKER);
+    if (isReminder) parent = await resolveParentByThread(msg.channelId || msg.channel?.id);
+  }
+  if (!parent) return; // not a payout or reminder message
 
   const rosterDisplay = await getRosterDisplay(parent);
   // The reactor may be the slot's PILOT (the responsible/tagged person) or its
@@ -406,6 +418,7 @@ function startLootCloseSweeper(client) {
 
 module.exports = {
   PAYOUT_EMOJI,
+  CLAIM_REMINDER_MARKER,
   refreshPayoutState,
   onLootChanged,
   handlePayoutReaction,
