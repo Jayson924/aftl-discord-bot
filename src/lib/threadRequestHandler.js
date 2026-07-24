@@ -2,6 +2,8 @@ const supabase = require('../supabase');
 const { createRaidThread } = require('./createRaidThread');
 const { updateRaidThread } = require('./updateRaidThread');
 const { applyClearedDiscordEffects } = require('./clearLineup');
+const { updateLootMessage } = require('./lootThread');
+const { refreshPayoutState } = require('./lootPayout');
 
 // Default channel to create raid threads in when a request doesn't specify one.
 // Override with RAID_THREAD_CHANNEL_ID env var.
@@ -39,6 +41,14 @@ async function processThreadRequest(client, request) {
         lineupId: request.lineup_id,
       });
       resultThreadId = thread.id;
+
+      // A cleared lineup also has a LOOT thread whose tracker embed shows the
+      // roster (+ pilots). Refresh it too so web roster/pilot edits sync there.
+      // Both no-op when the lineup has no loot thread / payout message yet.
+      await updateLootMessage(client, request.lineup_id).catch(err =>
+        console.error('[ThreadRequests] loot embed refresh failed:', err.message));
+      await refreshPayoutState(client, { lineupId: request.lineup_id }, { canPost: false }).catch(err =>
+        console.error('[ThreadRequests] payout refresh failed:', err.message));
     } else if (action === 'clear') {
       // A clear that originated on the web app: lineups.completed + player
       // completions are already written there. Here we only do the Discord
