@@ -7,6 +7,7 @@ const CLASS_FAMILIES = {
     specializations: {
       swordmaster: { name: 'Swordmaster', classes: ['Moon Lord', 'Gladiator'] },
       mercenary:   { name: 'Mercenary',   classes: ['Barbarian', 'Destroyer'] },
+      avenger:     { name: 'Avenger',     classes: ['Dark Avenger'] },
     },
   },
   archer: {
@@ -42,6 +43,13 @@ const CLASS_FAMILIES = {
     specializations: {
       screamer: { name: 'Screamer', classes: ['Dark Summoner', 'Soul Eater'] },
       dancer:   { name: 'Dancer',   classes: ['Blade Dancer', 'Spirit Dancer'] },
+    },
+  },
+  assassin: {
+    name: 'Assassin',
+    specializations: {
+      chaser:  { name: 'Chaser',  classes: ['Ripper', 'Raven'] },
+      bringer: { name: 'Bringer', classes: ['Light Fury', 'Abyss Walker'] },
     },
   },
 };

@@ -15,10 +15,12 @@ const CLASS_EMOJIS = {
   'Cleric':         { name: 'Cleric',         id: '1500201248354205778' },
   'Academic':       { name: 'Academic',       id: '1500201234924175543' },
   'Kali':           { name: 'Kali',           id: '1500201264078655579' },
+  'Assassin':       { name: 'Assassin',       id: '1535422963736903801' },
 
   // ─── Specializations ───
   'Swordmaster':    { name: 'Swordmaster',    id: '1500201281141215413' },
   'Mercenary':      { name: 'Mercenary',      id: '1500201266230464652' },
+  'Avenger':        { name: 'Avenger',        id: '1535422964747472937' },
   'Bowmaster':      { name: 'Bowmaster',      id: '1500201246915559574' },
   'Acrobat':        { name: 'Acrobat',        id: '1500201236669005954' },
   'Elemental Lord': { name: 'ElementalLord',  id: '1500201254079434843' },
@@ -29,6 +31,8 @@ const CLASS_EMOJIS = {
   'Alchemist':      { name: 'Alchemist',      id: '1500201239257022615' },
   'Screamer':       { name: 'Screamer',       id: '1500201274359025834' },
   'Dancer':         { name: 'Dancer',         id: '1500201250904608918' },
+  'Chaser':         { name: 'Chaser',         id: '1535422966987366442' },
+  'Bringer':        { name: 'Bringer',        id: '1535422965955436646' },
 
   // ─── Final classes ───
   'Gladiator':      { name: 'Gladiator',      id: '1500201260798971904' },
@@ -56,6 +60,10 @@ const CLASS_EMOJIS = {
   'Blade Dancer':   { name: 'BladeDancer',    id: '1500201246051795206' },
   'Spirit Dancer':  { name: 'SpiritDancer',   id: '1500201280134451262' },
   'Dark Avenger':   { name: 'DarkAvenger',    id: '1521022885626380349' },
+  'Ripper':         { name: 'Ripper',         id: '1535422970607042592' },
+  'Raven':          { name: 'Raven',          id: '1535422969713659965' },
+  'Light Fury':     { name: 'LightFury',      id: '1535422968639914125' },
+  'Abyss Walker':   { name: 'AbyssWalker',    id: '1535422962985861220' },
 };
 
 /**
