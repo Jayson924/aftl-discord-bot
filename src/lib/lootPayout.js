@@ -201,8 +201,10 @@ async function refreshPayoutState(client, ref, { canPost = false, force = false 
   // current share. A forgotten item raising the share re-opens things.
   const readyToClose = allSold && allConfirmed;
 
+  // 'thread-missing' (id set, channel gone) is a different fix from 'no-thread'
+  // (never linked) — the command words them differently.
   const thread = await client.channels.fetch(parent.lootThreadId).catch(() => null);
-  if (!thread) return { status: 'no-thread', ...stats };
+  if (!thread) return { status: 'thread-missing', ...stats };
 
   // Resolve the stored message IN THIS THREAD. If it doesn't resolve (deleted, or
   // it lives in a loot thread this lineup no longer uses) treat it as missing so
