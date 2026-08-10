@@ -291,6 +291,16 @@ async function applyClearedDiscordEffects({ lineup, raidThread, skipTag = false 
     console.error('[clearLineup] failed to create loot thread:', err);
   }
 
+  // Loot can be logged from the RAID thread before a loot thread exists (`/loot`
+  // resolves by either thread id). The payout message can't post while there's
+  // nowhere to put it, and nothing re-checks until the next loot change — so
+  // check now that the thread is here. No-op unless everything's already sold.
+  if (lootThread) {
+    await require('./lootPayout')
+      .refreshPayoutState(raidThread.client, { lineupId: lineup.id }, { canPost: true })
+      .catch(err => console.error('[clearLineup] payout check failed:', err.message));
+  }
+
   return { tagged, lootThread };
 }
 
