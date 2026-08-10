@@ -6,6 +6,7 @@
 //   /loot sold   item:<pick> price:<gold>             → mark an item sold
 //   /loot remove item:<pick>                          → delete an entry
 //   /loot list                                        → show the current loot
+//   /loot payout                                      → post/repost the ✅ gold-share message
 //
 // Run inside the loot thread (or the raid thread); the lineup is resolved from
 // the thread id.
@@ -23,6 +24,7 @@ const {
   buildLootEmbed,
   updateLootMessage,
 } = require('../lib/lootThread');
+const { refreshPayoutState } = require('../lib/lootPayout');
 
 // Resolve a user-supplied item option (ideally a loot id from autocomplete, but
 // could be free-typed text) to a loot row.
@@ -68,7 +70,12 @@ module.exports = {
           o.setName('item').setDescription('Which entry to remove').setRequired(true).setAutocomplete(true)
         )
     )
-    .addSubcommand(sub => sub.setName('list').setDescription('Show the current loot for this raid')),
+    .addSubcommand(sub => sub.setName('list').setDescription('Show the current loot for this raid'))
+    .addSubcommand(sub =>
+      sub
+        .setName('payout')
+        .setDescription("Post (or re-post) the 'react ✅ for your gold share' message in the loot thread")
+    ),
 
   async autocomplete(interaction) {
     const focused = interaction.options.getFocused(true);
@@ -172,6 +179,44 @@ module.exports = {
           embeds: [buildLootEmbed(embedLineup, rows, rosterDisplay, { raidThreadId: parent.threadId })],
           ephemeral: true,
         });
+      }
+
+      if (sub === 'payout') {
+        // Manual escape hatch: normally the payout message posts itself the moment
+        // the last item sells. It can't when the loot thread changed underneath it
+        // (an un-clear → re-clear spins up a NEW thread while payout_message_id
+        // still points into the old one) or when the message was deleted. Forcing
+        // it posts a fresh one in the lineup's CURRENT loot thread and re-links it.
+        await interaction.deferReply({ ephemeral: true });
+        // Re-sync the tracker embed too — a thread that was created after the loot
+        // was logged starts out showing an empty list.
+        await updateLootMessage(interaction.client, parent).catch(err =>
+          console.error('[loot] payout embed refresh failed:', err.message));
+        const result = await refreshPayoutState(interaction.client, parent, { canPost: true, force: true });
+
+        if (result.status !== 'posted' && result.status !== 'updated') {
+          const why = {
+            'no-thread': "This raid has no loot thread linked, so there's nowhere to post the payout message.",
+            'nothing-sold': 'Nothing has been marked sold yet — log the sale with `/loot sold` first, then run this again.',
+            'send-failed': "Couldn't post in this thread — check my permissions here.",
+          }[result.status] || 'Nothing to post yet.';
+          return interaction.editReply(why);
+        }
+
+        const lines = [
+          result.status === 'posted'
+            ? `${result.replaced ? '♻️ Re-posted' : '✅ Posted'} the gold-share message: ${result.messageUrl}`
+            : `🔄 Refreshed the gold-share message: ${result.messageUrl}`,
+          `🪙 **${fmtGold(result.total)}** total · 🪙 **${fmtGold(result.payoutEach)}** each _(÷${result.partySize})_`,
+        ];
+        if (result.reopened) lines.push('_The payout had already been closed — re-opened it._');
+        if (result.unsoldCount > 0) {
+          lines.push(
+            `⚠️ **${result.unsoldCount}** item${result.unsoldCount === 1 ? '' : 's'} still unsold — ` +
+            'anyone who confirms now will be asked for the difference once those sell.'
+          );
+        }
+        return interaction.editReply(lines.join('\n'));
       }
     } catch (err) {
       console.error('[loot] command error:', err);

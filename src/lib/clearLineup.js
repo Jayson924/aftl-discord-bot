@@ -3,7 +3,7 @@ const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 const { formatShortTime } = require('./createRaidThread');
 const { getCompletionColumn, usesTickets } = require('./raidTypes');
-const { buildLootEmbed, getRosterDisplay } = require('./lootThread');
+const { buildLootEmbed, getRosterDisplay, getLootRows, updateLootMessage } = require('./lootThread');
 
 const COMPLETED_TAG_NAME = process.env.RAID_COMPLETED_TAG_NAME || 'Cleared';
 // Exact tag ID for the Cleared tag (immune to renames/emoji). Hardcoded for
@@ -109,17 +109,62 @@ async function markPlayersCompletedForLineup(lineup) {
   return { updated, ticketUpdated };
 }
 
+/**
+ * Reuse the loot thread this lineup is already linked to, if it still exists.
+ *
+ * Un-clearing and re-clearing a lineup runs the clear flow again — but the loot
+ * rows are keyed on the lineup, so a second thread would orphan the first and
+ * strand its payout message (payout_message_id would point at a message in a
+ * thread the bot no longer uses, and the "react ✅" post could never appear).
+ * Returns the existing thread (unarchived, embed refreshed) or null to make a
+ * new one.
+ */
+async function reuseLootThread(lineup, raidThread) {
+  const { data } = await supabase
+    .from('lineups')
+    .select('loot_thread_id')
+    .eq('id', lineup.id)
+    .maybeSingle();
+
+  const threadId = data?.loot_thread_id;
+  if (!threadId) return null;
+
+  const thread = await raidThread.client.channels.fetch(threadId).catch(() => null);
+  if (!thread) return null; // deleted — fall through and create a fresh one
+
+  if (thread.archived) {
+    await thread.setArchived(false, `Re-cleared ${lineup.name} — reopening its loot thread`).catch(err =>
+      console.error('[clearLineup] failed to unarchive loot thread:', err.message));
+  }
+  await updateLootMessage(raidThread.client, lineup.id).catch(err =>
+    console.error('[clearLineup] failed to refresh loot embed:', err.message));
+
+  console.log(`[clearLineup] reusing existing loot thread ${threadId} for ${lineup.name}`);
+  return thread;
+}
+
 async function createLootThread(lineup, raidThread) {
   const lootChannelId = process.env.LOOT_CHANNEL_ID;
   if (!lootChannelId) return null;
+
+  const existing = await reuseLootThread(lineup, raidThread).catch(err => {
+    console.error('[clearLineup] loot thread reuse check failed:', err.message);
+    return null;
+  });
+  if (existing) return existing;
 
   const lootChannel = await raidThread.client.channels.fetch(lootChannelId).catch(() => null);
   if (!lootChannel) return null;
 
   // The thread's original message is the combined roster + loot embed, which the
-  // bot edits in place as loot is logged (see lootThread.js).
-  const rosterDisplay = await getRosterDisplay(lineup.id, lineup.raid_type);
-  const embed = buildLootEmbed(lineup, [], rosterDisplay, { raidThreadId: raidThread.id });
+  // bot edits in place as loot is logged (see lootThread.js). Normally empty at
+  // this point, but a lineup that already had loot (re-cleared after its thread
+  // was deleted) keeps it.
+  const [rosterDisplay, lootRows] = await Promise.all([
+    getRosterDisplay(lineup.id, lineup.raid_type),
+    getLootRows(lineup.id),
+  ]);
+  const embed = buildLootEmbed(lineup, lootRows, rosterDisplay, { raidThreadId: raidThread.id });
 
   // Match the raid thread naming so paired raid + loot threads are easy to spot:
   //   "<raid_type> <name>"  optionally suffixed with " - <shortTime>"
@@ -154,10 +199,19 @@ async function createLootThread(lineup, raidThread) {
 
   // Link the thread + its original message so `/loot` and the realtime sync can
   // edit it in place. (For forum posts the starter message id === the thread id.)
+  // Payout bookkeeping is reset: any previous payout message lived in a thread
+  // that's gone, so this one starts fresh (recorded shares in lineup_payouts are
+  // kept — the new message renders them as already confirmed).
   try {
     await supabase
       .from('lineups')
-      .update({ loot_thread_id: lootThread.id, loot_message_id: starter?.id || lootThread.id })
+      .update({
+        loot_thread_id: lootThread.id,
+        loot_message_id: starter?.id || lootThread.id,
+        payout_message_id: null,
+        loot_close_at: null,
+        loot_closed: false,
+      })
       .eq('id', lineup.id);
   } catch (err) {
     console.error('[clearLineup] failed to link loot thread:', err.message);

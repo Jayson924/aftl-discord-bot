@@ -159,12 +159,22 @@ function buildPayoutContent(rosterDisplay, paidMap, total, payoutEach, closeAt, 
 // this keeps message creation single-sourced (the moment the last item sells),
 // so the payout-sync and reaction paths can't race and double-post. Those paths
 // only ever edit an existing message + manage the close timer.
+//
+// force: the manual `/loot payout` escape hatch. Posts here and now — it doesn't
+// wait for every item to be sold, re-posts when the stored message is gone (a
+// re-cleared lineup gets a NEW loot thread while payout_message_id still points
+// into the old one, which otherwise strands the thread forever), and re-opens an
+// already-closed payout. Only needs some gold to actually split.
+//
+// Returns a { status, ... } summary so callers (the command) can explain what
+// happened; the automatic callers ignore it.
 
 // `ref` is a { lineupId } / { recordId } ref, a parent object, or a legacy lineup
 // id. Re-resolves a fresh parent so bookkeeping is current.
-async function refreshPayoutState(client, ref, { canPost = false } = {}) {
+async function refreshPayoutState(client, ref, { canPost = false, force = false } = {}) {
   const parent = await resolveParentById(toRef(ref));
-  if (!parent || !parent.lootThreadId) return;
+  if (!parent) return { status: 'not-found' };
+  if (!parent.lootThreadId) return { status: 'no-thread' };
 
   const [lootRows, rosterDisplay, payoutRows] = await Promise.all([
     getLootRows(parent),
@@ -176,11 +186,11 @@ async function refreshPayoutState(client, ref, { canPost = false } = {}) {
   const total = lootRows.reduce((s, l) => s + (l.sold ? l.price : 0), 0);
   const payoutEach = partySize > 0 ? Math.floor(total / partySize) : 0;
   const allSold = lootRows.length > 0 && lootRows.every(l => l.sold);
-  const shouldExist = allSold && total > 0;
-
-  const hasMessage = !!parent.payoutMessageId;
-  // Nothing to do yet: no message and either not allowed to post or not all sold.
-  if (!hasMessage && (!canPost || !shouldExist)) return;
+  const unsoldCount = lootRows.filter(l => !l.sold).length;
+  // Automatic path waits until everything's sold (the number is final); a forced
+  // post just needs something to split.
+  const shouldExist = total > 0 && (allSold || force);
+  const stats = { total, payoutEach, partySize, unsoldCount };
 
   // name → gold withdrawn. Settled = withdrew >= the current payout-each.
   const paidMap = new Map(payoutRows.map(p => [p.member_name, p.amount]));
@@ -191,10 +201,48 @@ async function refreshPayoutState(client, ref, { canPost = false } = {}) {
   // current share. A forgotten item raising the share re-opens things.
   const readyToClose = allSold && allConfirmed;
 
-  // Manage the 3-hour auto-close window.
-  let closeAt = parent.lootCloseAt ? new Date(parent.lootCloseAt) : null;
+  const thread = await client.channels.fetch(parent.lootThreadId).catch(() => null);
+  if (!thread) return { status: 'no-thread', ...stats };
+
+  // Resolve the stored message IN THIS THREAD. If it doesn't resolve (deleted, or
+  // it lives in a loot thread this lineup no longer uses) treat it as missing so
+  // a create-capable path can post a fresh one here.
+  let message = parent.payoutMessageId
+    ? await thread.messages.fetch(parent.payoutMessageId).catch(() => null)
+    : null;
+  const stale = !!parent.payoutMessageId && !message;
+  const canCreate = canPost || force;
+
+  if (!message && (!canCreate || !shouldExist || (parent.lootClosed && !force))) {
+    // Nothing to do yet — report why for the manual path.
+    if (parent.lootClosed) return { status: 'closed', ...stats };
+    if (total <= 0) return { status: 'nothing-sold', ...stats };
+    return { status: stale ? 'stale' : 'not-ready', ...stats };
+  }
+
+  // A closed payout archives its thread; a forced re-post has to reopen it first
+  // (Discord rejects sends/edits in an archived thread).
+  if (force && thread.archived) {
+    await thread.setArchived(false, 'Loot payout re-posted').catch(err =>
+      console.error('[payout] unarchive failed:', err.message));
+  }
+
+  // A forced post on a closed payout re-opens it (otherwise the message would
+  // just say "thread closed" and nobody could confirm).
   const updates = {};
-  if (!parent.lootClosed) {
+  let closed = parent.lootClosed;
+  const reopened = force && closed;
+  if (reopened) {
+    closed = false;
+    updates.loot_closed = false;
+  }
+
+  // Manage the 3-hour auto-close window. A reopen drops the old (already elapsed)
+  // window so the sweeper can't immediately re-close the thread — if everyone's
+  // still settled, the block below starts a fresh 3 hours.
+  let closeAt = !reopened && parent.lootCloseAt ? new Date(parent.lootCloseAt) : null;
+  if (reopened && parent.lootCloseAt) updates.loot_close_at = null;
+  if (!closed) {
     if (readyToClose && !closeAt) {
       closeAt = new Date(Date.now() + CLOSE_DELAY_MS);
       updates.loot_close_at = closeAt.toISOString();
@@ -206,28 +254,24 @@ async function refreshPayoutState(client, ref, { canPost = false } = {}) {
     }
   }
 
-  const thread = await client.channels.fetch(parent.lootThreadId).catch(() => null);
-  if (!thread) return;
+  const content = buildPayoutContent(rosterDisplay, paidMap, total, payoutEach, closeAt, closed);
 
-  const content = buildPayoutContent(rosterDisplay, paidMap, total, payoutEach, closeAt, parent.lootClosed);
-
-  let message = null;
-  if (!hasMessage) {
-    // First time everything's sold: post the confirm message (pings linked
-    // members) and seed the ✅ reaction so members can just click it.
+  let status;
+  if (!message) {
+    // First time everything's sold (or a forced re-post): post the confirm
+    // message (pings linked members) and seed the ✅ so members can just click it.
     message = await thread
       .send({ content, allowedMentions: { parse: ['users'] } })
       .catch(err => { console.error('[payout] send failed:', err.message); return null; });
-    if (!message) return;
+    if (!message) return { status: 'send-failed', ...stats };
     await message.react(PAYOUT_EMOJI).catch(() => {});
     updates.payout_message_id = message.id;
+    status = 'posted';
   } else {
-    message = await thread.messages.fetch(parent.payoutMessageId).catch(() => null);
-    if (message) {
-      await message
-        .edit({ content, allowedMentions: { parse: [] } })
-        .catch(err => console.error('[payout] edit failed:', err.message));
-    }
+    await message
+      .edit({ content, allowedMentions: { parse: [] } })
+      .catch(err => console.error('[payout] edit failed:', err.message));
+    status = 'updated';
   }
 
   if (Object.keys(updates).length) {
@@ -237,7 +281,7 @@ async function refreshPayoutState(client, ref, { canPost = false } = {}) {
   // A forgotten item was sold after some members confirmed → they're now "partial"
   // (withdrew a smaller prior share). Remove their stale ✅ so they must re-react
   // for the top-up. Guarded so this removal doesn't wipe their recorded amount.
-  if (message && !parent.lootClosed) {
+  if (!closed) {
     const reaction = message.reactions.cache.get(PAYOUT_EMOJI);
     if (reaction) {
       for (const m of linked) {
@@ -251,6 +295,8 @@ async function refreshPayoutState(client, ref, { canPost = false } = {}) {
       }
     }
   }
+
+  return { status, ...stats, reopened, replaced: stale && status === 'posted', messageUrl: message.url };
 }
 
 // Called from the lineup_loot realtime sync (lootThread.startLootSync) after the
