@@ -1,7 +1,5 @@
-# AFTL Raid Manager
+# Afterlight Companion Bot
 
-Roster, raid lineup, and loot management for a game guild, plus a real-time PvP
-tournament event mode (glorified rock paper scissors, really). Vanilla JS on Vite, Supabase for data and realtime, Netlify Functions
-for privileged writes, Discord OAuth for identity.
+A Discord companion bot for the aftl-raid web app. It shares a Supabase Postgres database, so roster and lineup changes made on the site surface in Discord within seconds, and loot posted in Discord lands in the same ledger the site reads from. No API between them; one database, two front doors.
 
-Built and maintained solo; a personal project, not set up for outside contributions.
+Built and maintained solo. It's a personal project, not set up for outside contributions.
