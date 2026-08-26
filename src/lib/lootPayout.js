@@ -26,6 +26,7 @@ const {
   parentCol,
   toRef,
 } = require('./lootThread');
+const { subscribeWithRetry } = require('./realtime');
 
 // Stable substring in the daily claim-reminder message (lootClaimReminders.js),
 // used to recognize a ✅ reaction on THAT message and route it like a payout ✅.
@@ -201,6 +202,10 @@ async function refreshPayoutState(client, ref, { canPost = false, force = false 
   // current share. A forgotten item raising the share re-opens things.
   const readyToClose = allSold && allConfirmed;
 
+  // Nothing sold and no message to keep in sync => this call can't do anything.
+  // Bail before touching Discord so the reconciler's routine passes stay cheap.
+  if (total <= 0 && !parent.payoutMessageId) return { status: 'nothing-sold', ...stats };
+
   // 'thread-missing' (id set, channel gone) is a different fix from 'no-thread'
   // (never linked) — the command words them differently.
   const thread = await client.channels.fetch(parent.lootThreadId).catch(() => null);
@@ -269,6 +274,10 @@ async function refreshPayoutState(client, ref, { canPost = false, force = false 
     await message.react(PAYOUT_EMOJI).catch(() => {});
     updates.payout_message_id = message.id;
     status = 'posted';
+  } else if (message.content === content) {
+    // Already says exactly this — skip the API call. The reconciler re-checks
+    // every open payout on a timer, so most of its passes land here.
+    status = 'unchanged';
   } else {
     await message
       .edit({ content, allowedMentions: { parse: [] } })
@@ -392,14 +401,119 @@ function startPayoutSync(client) {
     );
   };
 
-  supabase
-    .channel('lineup-payouts-sync')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'lineup_payouts' },
-      (payload) => schedule(refFromLootPayload(payload))
-    )
-    .subscribe((status) => console.log('[payout] lineup_payouts sync channel:', status));
+  // Self-healing: while this channel was dead, shares ticked on the WEBSITE never
+  // reached Discord — the ✅ list just sat there stale. On rejoin, sweep so the
+  // marks made during the outage land immediately.
+  return subscribeWithRetry({
+    label: 'payout',
+    channelName: 'lineup-payouts-sync',
+    table: 'lineup_payouts',
+    handler: (payload) => schedule(refFromLootPayload(payload)),
+    onResubscribe: () => sweepOpenPayouts(client),
+  });
+}
+
+// ============================================
+// RECONCILER  (the fallback that makes realtime optional)
+// ============================================
+//
+// Realtime is the fast path; this is the guarantee. Every OPEN loot parent (has a
+// loot thread, not yet closed) has its payout state re-derived on a timer, with
+// canPost so a message that should exist but doesn't gets posted.
+//
+// This exists because both failures we actually hit were silent realtime outages:
+// the `lineup_loot` channel dying meant nothing ever posted the payout message
+// when the last item sold (onLootChanged is the only creator), and the
+// `lineup_payouts` channel dying meant shares ticked on the WEBSITE never
+// reached the thread's ✅ list. Neither surfaced an error — the bot just stopped
+// hearing. With this sweep, the worst case is a few minutes of lag, not silence.
+//
+// Kept cheap on purpose: refreshPayoutState bails before touching Discord when
+// there's nothing sold and no message, and skips the edit when content is
+// unchanged, so a routine pass is a couple of indexed selects per parent.
+
+const RECONCILE_ENABLED = process.env.PAYOUT_RECONCILE_ENABLED !== 'false';
+const RECONCILE_INTERVAL_MS = Math.max(1, Number(process.env.PAYOUT_RECONCILE_MINUTES) || 5) * 60 * 1000;
+// The sweep may only CREATE a payout message in a reasonably fresh loot thread.
+// Plenty of long-dead threads sit open forever (loot sold, everyone settled up in
+// chat, nobody ticked the boxes) — posting a fresh "react ✅" ping into a
+// month-old thread would be pure noise. Those still get refreshed, just never
+// seeded; `/loot payout` remains the deliberate way to revive an old one.
+const RECONCILE_POST_MAX_AGE_MS =
+  Math.max(1, Number(process.env.PAYOUT_RECONCILE_POST_MAX_AGE_DAYS) || 7) * 24 * 60 * 60 * 1000;
+
+const DISCORD_EPOCH_MS = 1420070400000;
+
+// Discord snowflakes are time-ordered — no extra column needed to age a thread.
+function snowflakeAgeMs(id) {
+  try {
+    return Date.now() - (Number(BigInt(id) >> 22n) + DISCORD_EPOCH_MS);
+  } catch {
+    return Infinity; // unparseable id => treat as ancient (refresh only)
+  }
+}
+
+let sweepInFlight = false;
+
+// Re-derive the payout state for every open loot parent. Safe to call any time —
+// also used as the catch-up hook when a realtime channel rejoins.
+async function sweepOpenPayouts(client) {
+  if (!client) return;
+  if (sweepInFlight) return; // a slow pass must not stack up behind itself
+  sweepInFlight = true;
+  try {
+    const [lineupsRes, recordsRes] = await Promise.all([
+      supabase.from('lineups').select('id, name, loot_thread_id')
+        .eq('loot_closed', false).not('loot_thread_id', 'is', null),
+      supabase.from('loot_records').select('id, lineup_name, loot_thread_id')
+        .eq('loot_closed', false).not('loot_thread_id', 'is', null),
+    ]);
+
+    if (lineupsRes.error) console.error('[payout] reconcile query (lineups) failed:', lineupsRes.error.message);
+    if (recordsRes.error) console.error('[payout] reconcile query (records) failed:', recordsRes.error.message);
+
+    const open = [
+      ...(lineupsRes.data || []).map(l => ({ ref: { lineupId: l.id }, name: l.name, threadId: l.loot_thread_id })),
+      ...(recordsRes.data || []).map(r => ({ ref: { recordId: r.id }, name: r.lineup_name, threadId: r.loot_thread_id })),
+    ];
+    if (open.length === 0) return;
+
+    let posted = 0;
+    let updated = 0;
+    // Sequential: these are background top-ups, not worth a burst of API calls.
+    for (const item of open) {
+      try {
+        const canPost = snowflakeAgeMs(item.threadId) <= RECONCILE_POST_MAX_AGE_MS;
+        const result = await refreshPayoutState(client, item.ref, { canPost });
+        if (result.status === 'posted') {
+          posted += 1;
+          console.log(`[payout] reconciler posted the gold-share message for ${item.name}`);
+        } else if (result.status === 'updated') {
+          updated += 1;
+          console.log(`[payout] reconciler refreshed the gold-share message for ${item.name}`);
+        }
+      } catch (err) {
+        console.error(`[payout] reconcile failed for ${item.name}:`, err.message);
+      }
+    }
+    if (posted || updated) {
+      console.log(`[payout] reconciled ${open.length} open payout(s): ${posted} posted, ${updated} updated`);
+    }
+  } finally {
+    sweepInFlight = false;
+  }
+}
+
+function startPayoutReconciler(client) {
+  if (!RECONCILE_ENABLED) {
+    console.log('[payout] reconciler disabled (PAYOUT_RECONCILE_ENABLED=false)');
+    return null;
+  }
+  console.log(`[payout] starting reconciler (every ${RECONCILE_INTERVAL_MS / 60000} min)`);
+  sweepOpenPayouts(client).catch(err => console.error('[payout] initial reconcile failed:', err.message));
+  return setInterval(() => {
+    sweepOpenPayouts(client).catch(err => console.error('[payout] scheduled reconcile failed:', err.message));
+  }, RECONCILE_INTERVAL_MS);
 }
 
 // ============================================
@@ -471,5 +585,7 @@ module.exports = {
   onLootChanged,
   handlePayoutReaction,
   startPayoutSync,
+  sweepOpenPayouts,
+  startPayoutReconciler,
   startLootCloseSweeper,
 };

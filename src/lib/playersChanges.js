@@ -11,7 +11,7 @@
 // onPlayersChange(); start the single subscription with startPlayersChanges()
 // (idempotent — safe to call from multiple feature start functions).
 
-const supabase = require('../supabase');
+const { subscribeWithRetry } = require('./realtime');
 
 const listeners = [];
 let channel = null;
@@ -27,24 +27,20 @@ function onPlayersChange(listener) {
 function startPlayersChanges() {
   if (channel) return channel; // already subscribed
 
-  channel = supabase
-    .channel('players-changes')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'players' },
-      (payload) => {
-        for (const listener of listeners) {
-          try {
-            listener(payload);
-          } catch (err) {
-            console.error('[players-changes] listener error:', err);
-          }
+  channel = subscribeWithRetry({
+    label: 'players-changes',
+    channelName: 'players-changes',
+    table: 'players',
+    handler: (payload) => {
+      for (const listener of listeners) {
+        try {
+          listener(payload);
+        } catch (err) {
+          console.error('[players-changes] listener error:', err);
         }
       }
-    )
-    .subscribe((status) => {
-      console.log(`[players-changes] channel: ${status}`);
-    });
+    },
+  });
 
   return channel;
 }

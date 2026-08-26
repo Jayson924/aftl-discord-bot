@@ -14,6 +14,7 @@ const { EmbedBuilder } = require('discord.js');
 const supabase = require('../supabase');
 const { getRaidColor, getLineupSize } = require('./raidTypes');
 const { getPilotNameToId } = require('./lineupMentions');
+const { subscribeWithRetry } = require('./realtime');
 
 const fmtGold = (n) => (Number(n) || 0).toLocaleString('en-US');
 
@@ -484,14 +485,16 @@ function startLootSync(client) {
     );
   };
 
-  supabase
-    .channel('lineup-loot-sync')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'lineup_loot' },
-      (payload) => schedule(refFromLootPayload(payload))
-    )
-    .subscribe((status) => console.log('[loot] lineup_loot sync channel:', status));
+  // Self-healing subscription: a dead channel here used to silently disable BOTH
+  // the tracker embed sync and (via onLootChanged) the only path that posts a
+  // payout message. On rejoin, reconcile whatever changed while we were deaf.
+  return subscribeWithRetry({
+    label: 'loot',
+    channelName: 'lineup-loot-sync',
+    table: 'lineup_loot',
+    handler: (payload) => schedule(refFromLootPayload(payload)),
+    onResubscribe: () => require('./lootPayout').sweepOpenPayouts(client),
+  });
 }
 
 module.exports = {

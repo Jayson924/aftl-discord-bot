@@ -10,7 +10,7 @@
 // Register listeners with onAppUsersChange(); start the single subscription with
 // startAppUsersChanges() (idempotent — safe to call from multiple features).
 
-const supabase = require('../supabase');
+const { subscribeWithRetry } = require('./realtime');
 
 const listeners = [];
 let channel = null;
@@ -26,24 +26,20 @@ function onAppUsersChange(listener) {
 function startAppUsersChanges() {
   if (channel) return channel; // already subscribed
 
-  channel = supabase
-    .channel('app-users-changes')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'app_users' },
-      (payload) => {
-        for (const listener of listeners) {
-          try {
-            listener(payload);
-          } catch (err) {
-            console.error('[app-users-changes] listener error:', err);
-          }
+  channel = subscribeWithRetry({
+    label: 'app-users-changes',
+    channelName: 'app-users-changes',
+    table: 'app_users',
+    handler: (payload) => {
+      for (const listener of listeners) {
+        try {
+          listener(payload);
+        } catch (err) {
+          console.error('[app-users-changes] listener error:', err);
         }
       }
-    )
-    .subscribe((status) => {
-      console.log(`[app-users-changes] channel: ${status}`);
-    });
+    },
+  });
 
   return channel;
 }

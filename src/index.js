@@ -8,7 +8,7 @@ const { startRaidRoleScheduler } = require('./lib/raidRoleScheduler');
 const { startNewUserNotifier, handleNewUserButton } = require('./lib/newUserNotifier');
 const { startNewCharacterNotifier, handleNewCharacterButton } = require('./lib/newCharacterNotifier');
 const { startLootSync } = require('./lib/lootThread');
-const { startPayoutSync, startLootCloseSweeper } = require('./lib/lootPayout');
+const { startPayoutSync, startPayoutReconciler, startLootCloseSweeper } = require('./lib/lootPayout');
 const { startLootClaimReminders } = require('./lib/lootClaimReminders');
 const signupHandler = require('./lib/signupHandler');
 
@@ -75,6 +75,9 @@ client.once('ready', () => {
   startNewCharacterNotifier(client);
   startLootSync(client);
   startPayoutSync(client);
+  // Fallback for a realtime outage: re-derives every open payout on a timer, so
+  // a missed loot/payout event costs minutes of lag instead of going unnoticed.
+  startPayoutReconciler(client);
   startLootCloseSweeper(client);
   startLootClaimReminders(client);
 });

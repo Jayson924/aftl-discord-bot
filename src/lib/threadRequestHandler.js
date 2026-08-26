@@ -1,4 +1,5 @@
 const supabase = require('../supabase');
+const { subscribeWithRetry } = require('./realtime');
 const { createRaidThread } = require('./createRaidThread');
 const { updateRaidThread } = require('./updateRaidThread');
 const { applyClearedDiscordEffects } = require('./clearLineup');
@@ -166,21 +167,19 @@ function startThreadRequestHandler(client) {
 
   // Subscribe to new inserts via Realtime for low-latency processing when the
   // socket is healthy (the poll above is the fallback if it isn't).
-  const channel = supabase
-    .channel('thread-requests-handler')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'thread_requests' },
-      (payload) => {
-        const row = payload.new;
-        if (row && row.status === 'pending') {
-          processThreadRequest(client, row);
-        }
+  const channel = subscribeWithRetry({
+    label: 'ThreadRequests',
+    channelName: 'thread-requests-handler',
+    table: 'thread_requests',
+    event: 'INSERT',
+    handler: (payload) => {
+      const row = payload.new;
+      if (row && row.status === 'pending') {
+        processThreadRequest(client, row);
       }
-    )
-    .subscribe((status) => {
-      console.log('[ThreadRequests] Subscription status:', status);
-    });
+    },
+    onResubscribe: () => pollPendingRequests(client),
+  });
 
   return channel;
 }

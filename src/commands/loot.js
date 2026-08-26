@@ -32,6 +32,24 @@ const {
 const { refreshPayoutState } = require('../lib/lootPayout');
 const { createLootThread } = require('../lib/clearLineup');
 
+// Keep the gold-share message in step after any loot change made from Discord.
+//
+// This used to ride solely on the `lineup_loot` realtime hook (startLootSync ->
+// onLootChanged), which made a silent channel outage disable the ONLY path that
+// posts a payout message: selling the last item updated the tracker embed and
+// then nothing happened. Calling it inline makes the Discord side self-sufficient
+// — realtime and the reconciler are now redundancy, not the mechanism.
+//
+// canPost (not force): still only posts once everything is sold, exactly as
+// before. Never throws — a payout hiccup must not fail the /loot reply.
+async function syncPayout(client, parent) {
+  try {
+    await refreshPayoutState(client, parent, { canPost: true });
+  } catch (err) {
+    console.error('[loot] payout sync failed:', err.message);
+  }
+}
+
 // Resolve a user-supplied item option (ideally a loot id from autocomplete, but
 // could be free-typed text) to a loot row.
 function resolveLootRow(lootRows, value, { unsoldOnly = false } = {}) {
@@ -305,6 +323,7 @@ module.exports = {
 
         await insertLootEntry(parent, { item, heldBy: holder, createdBy: interaction.user.id });
         await updateLootMessage(interaction.client, parent);
+        await syncPayout(interaction.client, parent);
         return interaction.reply(
           `➕ Logged **${item}**${holder ? ` — held by **${holder}**` : ''} _(unsold)_.`
         );
@@ -328,6 +347,9 @@ module.exports = {
           || interaction.user.username;
         await updateLootEntry(row.id, { sold: true, price, heldBy: sellerName });
         await updateLootMessage(interaction.client, parent);
+        // Selling the LAST item is what makes the payout final — post the
+        // gold-share message right here rather than waiting on the realtime hook.
+        await syncPayout(interaction.client, parent);
         return interaction.reply(`💰 **${row.item}** sold for 🪙 **${fmtGold(price)}** — held by **${sellerName}**.`);
       }
 
@@ -340,6 +362,7 @@ module.exports = {
         }
         await deleteLootEntry(row.id);
         await updateLootMessage(interaction.client, parent);
+        await syncPayout(interaction.client, parent);
         return interaction.reply(`🗑️ Removed **${row.item}**.`);
       }
 
@@ -374,7 +397,7 @@ module.exports = {
           console.error('[loot] payout embed refresh failed:', err.message));
         const result = await refreshPayoutState(interaction.client, parent, { canPost: true, force: true });
 
-        if (result.status !== 'posted' && result.status !== 'updated') {
+        if (!['posted', 'updated', 'unchanged'].includes(result.status)) {
           const why = {
             'no-thread': "This raid has no loot thread linked, so there's nowhere to post the payout message.",
             'thread-missing': "The linked loot thread is gone. Run this inside the thread you want to use, with `raid:`.",
@@ -388,7 +411,9 @@ module.exports = {
           prep.note,
           result.status === 'posted'
             ? `${result.replaced ? '♻️ Re-posted' : '✅ Posted'} the gold-share message: ${result.messageUrl}`
-            : `🔄 Refreshed the gold-share message: ${result.messageUrl}`,
+            : result.status === 'unchanged'
+              ? `✅ The gold-share message is already up to date: ${result.messageUrl}`
+              : `🔄 Refreshed the gold-share message: ${result.messageUrl}`,
           `🪙 **${fmtGold(result.total)}** total · 🪙 **${fmtGold(result.payoutEach)}** each _(÷${result.partySize})_`,
         ];
         if (result.reopened) lines.push('_The payout had already been closed — re-opened it._');
