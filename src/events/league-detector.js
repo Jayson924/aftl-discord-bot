@@ -2,6 +2,9 @@ const { Events } = require('discord.js');
 
 const LEAGUE_ACTIVITY_NAME = 'League of Legends';
 
+// Set to false to re-enable League roasts
+const ROASTS_PAUSED = true;
+
 // Possible roast timings (in minutes). 0 = roast immediately on launch.
 const ROAST_DELAY_MINUTES = [0, 5, 10, 15];
 
@@ -70,6 +73,7 @@ const lastRoastAt = new Map();
 module.exports = {
   name: Events.PresenceUpdate,
   execute(oldPresence, newPresence) {
+    if (ROASTS_PAUSED) return;
     if (!newPresence?.activities) return;
 
     const wasPlaying = oldPresence?.activities?.some(
