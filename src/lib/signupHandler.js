@@ -17,7 +17,6 @@ const {
   ALL_COMPLETION_COLUMNS,
   getLineupSize,
   isCharacterEligible,
-  usesTickets,
 } = require('./raidTypes');
 
 // In-memory stash for multi-step request state. Keyed by short request id.
@@ -39,7 +38,7 @@ function setStash(id, data) {
 async function getLineupWithPlayers(lineupId) {
   const { data, error } = await supabase
     .from('lineups')
-    .select('*, lineup_players (player_name, slot_position, player_id, uses_ticket, pilot_name)')
+    .select('*, lineup_players (player_name, slot_position, player_id, pilot_name)')
     .eq('id', lineupId)
     .single();
   if (error) throw error;
@@ -47,7 +46,7 @@ async function getLineupWithPlayers(lineupId) {
 }
 
 async function getCharactersOwnedBy(discordId) {
-  const baseColumns = ['id', 'name', 'role', 'discord_id', 'account_number', 'exclude', 'exclude_label', 'classic_ticket_used'];
+  const baseColumns = ['id', 'name', 'role', 'discord_id', 'account_number', 'exclude', 'exclude_label'];
   const select = [...baseColumns, ...ALL_COMPLETION_COLUMNS].join(', ');
   const { data, error } = await supabase
     .from('players')
@@ -86,13 +85,12 @@ function nextEmptySlot(lineup) {
   return null;
 }
 
-async function insertLineupPlayer(lineupId, slot, name, playerId, usesTicket) {
+async function insertLineupPlayer(lineupId, slot, name, playerId) {
   const { error } = await supabase.from('lineup_players').insert({
     lineup_id: lineupId,
     slot_position: slot,
     player_name: name,
     player_id: playerId,
-    uses_ticket: !!usesTicket,
     pilot_name: null,
   });
   if (error) throw error;
@@ -161,11 +159,9 @@ async function handle(interaction, client) {
     if (interaction.isStringSelectMenu()) {
       if (action === 'pickchar') return void await handlePickChar(interaction, parts[2]);
       if (action === 'pickdrop') return void await handlePickDrop(interaction, parts[2], client);
-      if (action === 'ticket')   return void await handleTicketPick(interaction, parts[2], client);
       if (action === 'gclass')   return void await handleGuestClassPick(interaction, parts[2]);
       if (action === 'gsubclass')return void await handleGuestSubclassPick(interaction, parts[2]);
       if (action === 'gfinal')   return void await handleGuestFinalClassPick(interaction, parts[2]);
-      if (action === 'guesttkt') return void await handleGuestTicketPick(interaction, parts[2]);
     }
     if (interaction.isModalSubmit()) {
       if (action === 'guestmodal') return void await handleGuestNameModalSubmit(interaction, parts[2]);
@@ -265,7 +261,6 @@ async function handleGuestNameModalSubmit(interaction, lineupId) {
     familyKey: null,
     specKey: null,
     finalClass: null,
-    usesTicket: false,
   });
 
   const select = new StringSelectMenuBuilder()
@@ -344,31 +339,6 @@ async function handleGuestFinalClassPick(interaction, requestId) {
   if (!valid.includes(finalClass)) return await respondTo(interaction, { content: 'Unknown class.', components: [] });
 
   data.finalClass = finalClass;
-
-  const lineup = await getLineupWithPlayers(data.lineupId);
-  if (usesTickets(lineup.raid_type)) {
-    const select = new StringSelectMenuBuilder()
-      .setCustomId(`signup:guesttkt:${requestId}`)
-      .setPlaceholder('Pania ticket?')
-      .addOptions(
-        { label: 'Yes', value: 'yes', description: 'Use a Pania ticket for this clear' },
-        { label: 'No', value: 'no' },
-      );
-    return await respondTo(interaction, {
-      content: `**${data.characterName}** (${finalClass}) — Pania ticket?`,
-      components: [new ActionRowBuilder().addComponents(select)],
-    });
-  }
-  return await submitGuestApproval(interaction, requestId);
-}
-
-async function handleGuestTicketPick(interaction, requestId) {
-  const data = stash.get(requestId);
-  const status = ensureRequestOwner(data, interaction);
-  if (status === 'expired') return await respondTo(interaction, { content: 'This prompt expired. Click Join again.', components: [] });
-  if (status === 'wrong-user') return await interaction.reply({ content: "That prompt isn't for you.", ephemeral: true });
-
-  data.usesTicket = interaction.values[0] === 'yes';
   return await submitGuestApproval(interaction, requestId);
 }
 
@@ -376,7 +346,7 @@ async function submitGuestApproval(interaction, requestId) {
   const data = stash.get(requestId);
   if (!data) return await respondTo(interaction, { content: 'This prompt expired. Click Join again.', components: [] });
   stash.delete(requestId);
-  return await postApprovalRequest(interaction, data.lineupId, /*character*/ null, data.usesTicket, 'unregistered character', {
+  return await postApprovalRequest(interaction, data.lineupId, /*character*/ null, 'unregistered character', {
     guest: { name: data.characterName, finalClass: data.finalClass },
   });
 }
@@ -440,59 +410,10 @@ async function handlePickChar(interaction, lineupId) {
 
 async function proceedAfterChar(interaction, lineupId, character) {
   const lineup = await getLineupWithPlayers(lineupId);
-  if (usesTickets(lineup.raid_type)) {
-    return await showTicketPicker(interaction, lineup, character);
-  }
-  return await evaluateAndAct(interaction, lineup, character, false);
+  return await evaluateAndAct(interaction, lineup, character);
 }
 
-async function showTicketPicker(interaction, lineup, character) {
-  const requestId = makeRequestId();
-  setStash(requestId, {
-    lineupId: lineup.id,
-    playerName: character.name,
-    discordId: interaction.user.id,
-  });
-
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`signup:ticket:${requestId}`)
-    .setPlaceholder('Pania ticket?')
-    .addOptions(
-      { label: 'Yes', value: 'yes', description: 'Use a Pania ticket for this clear' },
-      { label: 'No', value: 'no' },
-    );
-
-  await respondTo(interaction, {
-    content: `**${character.name}** — Pania ticket?`,
-    components: [new ActionRowBuilder().addComponents(select)],
-  });
-}
-
-async function handleTicketPick(interaction, requestId, client) {
-  const data = stash.get(requestId);
-  if (!data) {
-    return await respondTo(interaction, {
-      content: 'This prompt expired. Click Join again.',
-      components: [],
-    });
-  }
-  if (data.discordId !== interaction.user.id) {
-    return await interaction.reply({ content: "That prompt isn't for you.", ephemeral: true });
-  }
-
-  const usesTicket = interaction.values[0] === 'yes';
-  const lineup = await getLineupWithPlayers(data.lineupId);
-  const characters = await getCharactersOwnedBy(interaction.user.id);
-  const character = characters.find(c => c.name === data.playerName);
-  stash.delete(requestId);
-
-  if (!character) {
-    return await respondTo(interaction, { content: 'Character not found.', components: [] });
-  }
-  return await evaluateAndAct(interaction, lineup, character, usesTicket);
-}
-
-async function evaluateAndAct(interaction, lineup, character, usesTicket) {
+async function evaluateAndAct(interaction, lineup, character) {
   const appUser = await getAppUser(interaction.user.id);
 
   // Already in this lineup?
@@ -549,15 +470,14 @@ async function evaluateAndAct(interaction, lineup, character, usesTicket) {
       interaction,
       lineup.id,
       character,
-      usesTicket,
       displayReasons.length > 0 ? displayReasons.join('; ') : null,
     );
   }
 
   // Auto-add path — guildmate (or admin), no exclusions, no conflict.
-  await insertLineupPlayer(lineup.id, slot, character.name, character.id, usesTicket);
+  await insertLineupPlayer(lineup.id, slot, character.name, character.id);
   await respondTo(interaction, {
-    content: `✅ Added **${character.name}** to slot ${slot}${usesTicket ? ' 🎟️' : ''}.`,
+    content: `✅ Added **${character.name}** to slot ${slot}.`,
     components: [],
   });
   await refreshThread(interaction.client, lineup.id);
@@ -565,14 +485,13 @@ async function evaluateAndAct(interaction, lineup, character, usesTicket) {
 
 // === Approval flow ===
 
-async function postApprovalRequest(interaction, lineupId, character, usesTicket, reason, opts = {}) {
+async function postApprovalRequest(interaction, lineupId, character, reason, opts = {}) {
   const guest = opts.guest || null;
   const requestId = makeRequestId();
   setStash(requestId, {
     lineupId,
     playerName: character?.name || null,
     playerId: character?.id || null,
-    usesTicket: !!usesTicket,
     requesterId: interaction.user.id,
     guest, // { name, finalClass } or null
   });
@@ -590,10 +509,10 @@ async function postApprovalRequest(interaction, lineupId, character, usesTicket,
   if (character) {
     const emoji = getClassEmojiTag(character.role);
     const classBit = character.role ? ` ${emoji ? emoji + ' ' : ''}${character.role}` : '';
-    charLine = `Character: **${character.name}**${classBit}${usesTicket ? ' — Pania ticket 🎟️' : ''}`;
+    charLine = `Character: **${character.name}**${classBit}`;
   } else if (guest) {
     const emoji = getClassEmojiTag(guest.finalClass);
-    charLine = `Guest: **${guest.name}** ${emoji ? emoji + ' ' : ''}${guest.finalClass}${usesTicket ? ' — Pania ticket 🎟️' : ''}`;
+    charLine = `Guest: **${guest.name}** ${emoji ? emoji + ' ' : ''}${guest.finalClass}`;
   } else {
     charLine = 'Character: _none registered_';
   }
@@ -653,7 +572,7 @@ async function handleApproveClick(interaction, requestId, client) {
   if (data.guest) {
     // Guest format mirrors the web app: [PUB]Name|Class
     const playerName = `[PUB]${data.guest.name}|${data.guest.finalClass}`;
-    await insertLineupPlayer(data.lineupId, slot, playerName, null, data.usesTicket);
+    await insertLineupPlayer(data.lineupId, slot, playerName, null);
     insertedAs = `${data.guest.name} (${data.guest.finalClass}, guest)`;
   } else if (data.playerName && data.playerId) {
     const already = (lineup.lineup_players || []).some(lp => lp.player_name === data.playerName);
@@ -664,7 +583,7 @@ async function handleApproveClick(interaction, requestId, client) {
         components: [],
       });
     }
-    await insertLineupPlayer(data.lineupId, slot, data.playerName, data.playerId, data.usesTicket);
+    await insertLineupPlayer(data.lineupId, slot, data.playerName, data.playerId);
     insertedAs = data.playerName;
   } else {
     stash.delete(requestId);

@@ -2,7 +2,7 @@ const { ChannelType } = require('discord.js');
 const supabase = require('../supabase');
 const { getLineupMentions, formatMentionList } = require('./lineupMentions');
 const { formatShortTime } = require('./createRaidThread');
-const { getCompletionColumn, usesTickets } = require('./raidTypes');
+const { getCompletionColumn } = require('./raidTypes');
 const { buildLootEmbed, getRosterDisplay, getLootRows, updateLootMessage } = require('./lootThread');
 
 const COMPLETED_TAG_NAME = process.env.RAID_COMPLETED_TAG_NAME || 'Cleared';
@@ -36,24 +36,21 @@ async function applyCompletedTag(thread) {
  * Mirrors data.js#markPlayersCompleted on the web app.
  *
  * Sets the per-raid_type completion column on every player in the lineup.
- * Tickets only apply to GDN Classic — sets `classic_ticket_used = now()`
- * for any lineup_player with `uses_ticket = true`.
- *
  * Raid types with no completion column (4-man, Unspecified) are skipped.
  */
 async function markPlayersCompletedForLineup(lineup) {
   const column = getCompletionColumn(lineup.raid_type);
   if (!column) {
-    return { updated: 0, ticketUpdated: 0 };
+    return { updated: 0 };
   }
 
   const { data: lineupPlayers, error: lpError } = await supabase
     .from('lineup_players')
-    .select('player_name, player_id, uses_ticket')
+    .select('player_name, player_id')
     .eq('lineup_id', lineup.id);
 
   if (lpError || !lineupPlayers || lineupPlayers.length === 0) {
-    return { updated: 0, ticketUpdated: 0 };
+    return { updated: 0 };
   }
 
   const ids = lineupPlayers.map(lp => lp.player_id).filter(Boolean);
@@ -81,32 +78,7 @@ async function markPlayersCompletedForLineup(lineup) {
     else updated += count || 0;
   }
 
-  let ticketUpdated = 0;
-  if (usesTickets(lineup.raid_type)) {
-    const ticketIds = lineupPlayers.filter(lp => lp.uses_ticket && lp.player_id).map(lp => lp.player_id);
-    const ticketNames = lineupPlayers
-      .filter(lp => lp.uses_ticket && !lp.player_id && lp.player_name)
-      .map(lp => lp.player_name);
-
-    if (ticketIds.length > 0) {
-      const { error, count } = await supabase
-        .from('players')
-        .update({ classic_ticket_used: now }, { count: 'exact' })
-        .in('id', ticketIds);
-      if (error) console.error('[clearLineup] failed to mark tickets by id:', error);
-      else ticketUpdated += count || 0;
-    }
-    if (ticketNames.length > 0) {
-      const { error, count } = await supabase
-        .from('players')
-        .update({ classic_ticket_used: now }, { count: 'exact' })
-        .in('name', ticketNames);
-      if (error) console.error('[clearLineup] failed to mark tickets by name:', error);
-      else ticketUpdated += count || 0;
-    }
-  }
-
-  return { updated, ticketUpdated };
+  return { updated };
 }
 
 /**
@@ -249,18 +221,15 @@ async function clearLineup({ lineup, raidThread, skipTag = false }) {
   if (updateError) return { tagged: false, lootThread: null, updateError };
 
   let playersUpdated = 0;
-  let ticketsUpdated = 0;
   try {
-    const r = await markPlayersCompletedForLineup(lineup);
-    playersUpdated = r.updated;
-    ticketsUpdated = r.ticketUpdated;
+    playersUpdated = (await markPlayersCompletedForLineup(lineup)).updated;
   } catch (err) {
     console.error('[clearLineup] failed to mark player weekly completions:', err);
   }
 
   const { tagged, lootThread } = await applyClearedDiscordEffects({ lineup, raidThread, skipTag });
 
-  return { tagged, lootThread, playersUpdated, ticketsUpdated };
+  return { tagged, lootThread, playersUpdated };
 }
 
 /**

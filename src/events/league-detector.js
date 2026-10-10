@@ -21,7 +21,7 @@ const LAUNCH_ROASTS = [
   "{user} opened League. There's still time to close it. Please.",
   "Alert: {user} just clicked the League icon. Intervention needed.",
   "{user} probably lost money to Berlin and launched League.",
-  "Looks like {user} failed a GDN run and launched League",
+  "Looks like {user} failed a BDN run and launched League",
 ];
 
 // must include {minutes}

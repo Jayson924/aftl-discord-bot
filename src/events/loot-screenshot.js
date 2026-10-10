@@ -28,15 +28,11 @@ function parseMessage(text) {
   const lower = trimmed.toLowerCase();
 
   let raidType = null;
-  // BDN/DDN first: they share "classic"/"hc" with GDN names, so the specific match must win.
   if (/\bbdn\b/.test(lower)) raidType = 'BDN Classic';
   else if (/\bddn\s*(normal|n)\b/.test(lower)) raidType = 'DDN Normal';
   else if (/\bddn\s*(hardcore|hc)\b/.test(lower)) raidType = 'DDN Hardcore';
   else if (/\bddn\s*(classic|cl)?\b/.test(lower)) raidType = 'DDN Classic';
-  // Then 4-man (so '4-man hardcore' doesn't fall through to Hardcore on 'hc')
   else if (/\b4\s*-?\s*man\b/.test(lower)) raidType = '4-man';
-  else if (/\b(hardcore|hc)\b/.test(lower)) raidType = 'Hardcore';
-  else if (/\bclassic\b/.test(lower)) raidType = 'Classic';
 
   return { raidType, lineupName: trimmed || null };
 }

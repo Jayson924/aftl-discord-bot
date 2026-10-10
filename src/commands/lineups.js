@@ -23,7 +23,6 @@ module.exports = {
         lineup_players (
           player_name,
           slot_position,
-          uses_ticket,
           pilot_name
         )
       `)
@@ -56,7 +55,6 @@ module.exports = {
           if (idx >= 0 && idx < lineupSize) {
             let display = lp.player_name || '_empty_';
             if (lp.pilot_name) display += ` (pilot: ${lp.pilot_name})`;
-            if (lp.uses_ticket) display += ' 🎟️';
             players[idx] = display;
           }
         });

@@ -8,8 +8,6 @@ const { isCharacterEligible, ALL_COMPLETION_COLUMNS } = require('./raidTypes');
 // raid_type → env var holding the Discord role ID. Missing env var = the
 // feature is off for that raid type (no role assigned, no role removed).
 const RAID_ROLE_ENV_MAP = {
-  'Hardcore': 'RAID_ROLE_GDN_HARDCORE',
-  'Classic': 'RAID_ROLE_GDN_CLASSIC',
   'DDN Hardcore': 'RAID_ROLE_DDN_HARDCORE',
   'DDN Classic': 'RAID_ROLE_DDN_CLASSIC',
   'DDN Normal': 'RAID_ROLE_DDN_NORMAL',
@@ -20,7 +18,6 @@ const PLAYER_SELECT_COLUMNS = [
   'name',
   'discord_id',
   'exclude',
-  'classic_ticket_used',
   ...ALL_COMPLETION_COLUMNS,
 ].join(', ');
 
