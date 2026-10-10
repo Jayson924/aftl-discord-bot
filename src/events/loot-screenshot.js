@@ -10,25 +10,33 @@
 // (Sale screenshots posted *inside* a loot thread are handled separately by
 // loot-sold-screenshot.js.)
 
-const { Events } = require('discord.js');
+const { Events, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
 const supabase = require('../supabase');
 const { buildLootEmbed, getRosterDisplay } = require('../lib/lootThread');
 const { markPlayersCompletedForLineup } = require('../lib/clearLineup');
+const { RAID_TYPE_CHOICES } = require('../lib/raidTypes');
+
+// Options for the "which raid?" picker shown when the caption names no raid.
+const RAID_PICKER_CHOICES = [
+  ...RAID_TYPE_CHOICES,
+  { name: '4-man', value: '4-man' },
+  { name: 'Unspecified', value: 'Unspecified' },
+];
 
 function parseMessage(text) {
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
 
   let raidType = null;
-  // Match DDN variants first — they share substrings ("classic", "hc") with
-  // GDN raid names so the more specific check has to win.
-  if (/\bddn\s*(normal|n)\b/.test(lower)) raidType = 'DDN Normal';
+  // BDN/DDN first: they share "classic"/"hc" with GDN names, so the specific match must win.
+  if (/\bbdn\b/.test(lower)) raidType = 'BDN Classic';
+  else if (/\bddn\s*(normal|n)\b/.test(lower)) raidType = 'DDN Normal';
   else if (/\bddn\s*(hardcore|hc)\b/.test(lower)) raidType = 'DDN Hardcore';
   else if (/\bddn\s*(classic|cl)?\b/.test(lower)) raidType = 'DDN Classic';
   // Then 4-man (so '4-man hardcore' doesn't fall through to Hardcore on 'hc')
-  else if (lower.includes('4-man') || lower.includes('4man')) raidType = '4-man';
-  else if (lower.includes('hardcore') || lower.includes('hc')) raidType = 'Hardcore';
-  else if (lower.includes('classic')) raidType = 'Classic';
+  else if (/\b4\s*-?\s*man\b/.test(lower)) raidType = '4-man';
+  else if (/\b(hardcore|hc)\b/.test(lower)) raidType = 'Hardcore';
+  else if (/\bclassic\b/.test(lower)) raidType = 'Classic';
 
   return { raidType, lineupName: trimmed || null };
 }
@@ -102,6 +110,35 @@ Rules:
   const text = data.content?.[0]?.text || '';
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   return JSON.parse(jsonMatch ? jsonMatch[0] : text);
+}
+
+// Asks the poster which raid this was; 'Unspecified' if they don't pick within a minute.
+async function askRaidType(message) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`lootraid:${message.id}`)
+    .setPlaceholder('Which raid was this?')
+    .addOptions(RAID_PICKER_CHOICES.map((c) => ({ label: c.name, value: c.value })));
+
+  const prompt = await message.reply({
+    content: 'Which raid is this screenshot from?',
+    components: [new ActionRowBuilder().addComponents(menu)],
+  });
+
+  try {
+    const interaction = await prompt.awaitMessageComponent({
+      filter: (i) => i.user.id === message.author.id,
+      time: 60_000,
+    });
+    await interaction.deferUpdate();
+    await prompt.delete().catch(() => {});
+    return interaction.values[0];
+  } catch {
+    await prompt
+      .edit({ content: 'No raid picked — saving as Unspecified.', components: [] })
+      .catch(() => {});
+    setTimeout(() => prompt.delete().catch(() => {}), 10_000);
+    return 'Unspecified';
+  }
 }
 
 function detectMimeType(buffer, fallback) {
@@ -297,7 +334,7 @@ module.exports = {
     }
 
     if (!raidType) {
-      raidType = 'Unspecified';
+      raidType = await askRaidType(message);
     }
 
     await processScreenshot(message, attachment, raidType, lineupName);

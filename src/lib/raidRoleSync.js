@@ -13,6 +13,7 @@ const RAID_ROLE_ENV_MAP = {
   'DDN Hardcore': 'RAID_ROLE_DDN_HARDCORE',
   'DDN Classic': 'RAID_ROLE_DDN_CLASSIC',
   'DDN Normal': 'RAID_ROLE_DDN_NORMAL',
+  'BDN Classic': 'RAID_ROLE_BDN_CLASSIC',
 };
 
 const PLAYER_SELECT_COLUMNS = [

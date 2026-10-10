@@ -32,6 +32,8 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     // Gold-share ✅ confirmations in loot threads (non-privileged intent).
     GatewayIntentBits.GuildMessageReactions,
+    // Owner DMs to the admin agent (events/admin-agent.js).
+    GatewayIntentBits.DirectMessages,
   ],
   // Reactions can land on messages the bot hasn't cached — receive them as
   // partials so MessageReactionAdd/Remove still fire (hydrated in the handler).

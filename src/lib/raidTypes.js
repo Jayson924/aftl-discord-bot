@@ -11,6 +11,7 @@ function getCompletionColumn(raidType) {
   if (raidType === 'DDN Hardcore') return 'ddn_hardcore_completed';
   if (raidType === 'DDN Classic') return 'ddn_classic_completed';
   if (raidType === 'DDN Normal') return 'ddn_normal_completed';
+  if (raidType === 'BDN Classic') return 'bdn_classic_completed';
   return null;
 }
 
@@ -21,6 +22,7 @@ const ALL_COMPLETION_COLUMNS = [
   'ddn_hardcore_completed',
   'ddn_classic_completed',
   'ddn_normal_completed',
+  'bdn_classic_completed',
 ];
 
 function isFourManRaid(raidType) {
@@ -31,7 +33,8 @@ function getLineupSize(raidType) {
   return isFourManRaid(raidType) ? 4 : 8;
 }
 
-// Embed accent color per raid type. Jungle greens for GDN, sand tones for DDN.
+// Embed accent color per raid type. Jungle greens for GDN, sand tones for DDN,
+// dusk purple for BDN.
 function getRaidColor(raidType) {
   switch (raidType) {
     case 'Hardcore':     return 0x2d6a3a; // GDN — deep forest
@@ -39,6 +42,7 @@ function getRaidColor(raidType) {
     case 'DDN Hardcore': return 0xa06430; // DDN — dark sand
     case 'DDN Classic':  return 0xc69257; // DDN — sand
     case 'DDN Normal':   return 0xd9b07c; // DDN — pale dune
+    case 'BDN Classic':  return 0x5b3a8c; // BDN — dusk
     case '4-man':        return 0x7f8c8d; // neutral grey
     default:             return 0x3498db;
   }
@@ -59,6 +63,7 @@ function getRaidTagName(raidType) {
     case 'Classic':      return 'GDN C';
     case 'DDN Hardcore': return 'DDN HC';
     case 'DDN Classic':  return 'DDN C';
+    case 'BDN Classic':  return 'BDN C';
     default:             return null;
   }
 }
@@ -71,6 +76,8 @@ const RAID_TAG_IDS = {
   'Classic': '1496955552649973985',      // GDN C
   'DDN Hardcore': '1508047897235816448', // DDN HC
   'DDN Classic': '1508047435992272907',  // DDN C
+  // 'BDN Classic': create the BDN C forum tag in Discord, then add its ID here
+  // (or set RAID_TAG_BDN_C). Until then tagging falls back to name match.
 };
 
 const RAID_TAG_ENV_MAP = {
@@ -78,6 +85,7 @@ const RAID_TAG_ENV_MAP = {
   'Classic': 'RAID_TAG_GDN_C',
   'DDN Hardcore': 'RAID_TAG_DDN_HC',
   'DDN Classic': 'RAID_TAG_DDN_C',
+  'BDN Classic': 'RAID_TAG_BDN_C',
 };
 
 function getRaidTagId(raidType) {
@@ -115,6 +123,7 @@ function isCharacterEligible(character, raidType) {
   if (raidType === 'DDN Hardcore') return !character.ddn_hardcore_completed;
   if (raidType === 'DDN Classic') return !character.ddn_classic_completed;
   if (raidType === 'DDN Normal') return !character.ddn_normal_completed;
+  if (raidType === 'BDN Classic') return !character.bdn_classic_completed;
   // 4-man / Unspecified — no completion model wired in, treat as eligible.
   return true;
 }
@@ -123,6 +132,7 @@ function isCharacterEligible(character, raidType) {
 // DDN Normal / 4-man were retired from the web selectors; the data layer
 // keeps mapping them for any legacy lineup rows.
 const RAID_TYPE_CHOICES = [
+  { name: 'BDN Classic', value: 'BDN Classic' },
   { name: 'DDN Hardcore', value: 'DDN Hardcore' },
   { name: 'DDN Classic', value: 'DDN Classic' },
   { name: 'GDN Hardcore', value: 'Hardcore' },
