@@ -584,7 +584,7 @@ async function runAdminAgent({ message, text }) {
     fallbacks: 'default',
     system: SYSTEM_PROMPT,
     tools: buildTools({ message }),
-    messages: [...history, { role: 'user', content: `${message.author.username}: ${text}` }],
+    messages: [...history, { role: 'user', content: text }],
   });
 
   const final = await runner.runUntilDone();
