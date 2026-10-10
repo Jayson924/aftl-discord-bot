@@ -1,83 +1,49 @@
 const { SlashCommandBuilder } = require('discord.js');
-const supabase = require('../supabase');
+const { DEFAULT_LEVEL, FD_DIVISOR, fdToPercent, fdForPercent } = require('../lib/finalDamage');
 
-async function getFdTable() {
-  const { data, error } = await supabase
-    .from('app_config')
-    .select('value')
-    .eq('key', 'fd_table')
-    .single();
-
-  if (error || !data) return null;
-  return data.value;
-}
-
-function lookupFd(fdTable, value) {
-  for (let i = fdTable.length - 1; i >= 0; i--) {
-    if (value >= fdTable[i].fd) {
-      return fdTable[i].pct;
-    }
-  }
-  return null;
-}
-
-function lookupByPct(fdTable, pct) {
-  const entry = fdTable.find(e => e.pct === pct);
-  return entry ? entry.fd : null;
-}
+const LEVELS = Object.keys(FD_DIVISOR).map(Number);
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('fd')
-    .setDescription('Look up FD percentage from a value, or value from a percentage (e.g. 1359 or 40%)')
+    .setDescription('Convert a raw FD value to a percentage, or a percentage to the raw FD needed')
     .addStringOption(option =>
       option
         .setName('value')
-        .setDescription('A 4-digit number (e.g. 1359) or a percentage (e.g. 40%)')
+        .setDescription('Raw FD (e.g. 3762) or a percentage (e.g. 45%)')
         .setRequired(true),
+    )
+    .addIntegerOption(option =>
+      option
+        .setName('level')
+        .setDescription(`Character level (default ${DEFAULT_LEVEL})`)
+        .setMinValue(Math.min(...LEVELS))
+        .setMaxValue(Math.max(...LEVELS)),
     ),
 
   async execute(interaction) {
     const input = interaction.options.getString('value').trim();
-
-    const fdTable = await getFdTable();
-    if (!fdTable) {
-      await interaction.reply('Failed to load FD table from database.');
-      return;
-    }
-
-    fdTable.sort((a, b) => a.fd - b.fd);
+    const level = interaction.options.getInteger('level') ?? DEFAULT_LEVEL;
+    const cap = FD_DIVISOR[level];
 
     if (input.endsWith('%')) {
-      const pct = parseInt(input, 10);
-      if (isNaN(pct) || pct < 1 || pct > 100) {
-        await interaction.reply('Please provide a valid percentage (e.g. `40%`).');
+      const pct = parseFloat(input);
+      if (isNaN(pct) || pct <= 0 || pct > 60) {
+        await interaction.reply('Please provide a percentage between 1% and 60% (e.g. `45%`).');
         return;
       }
-
-      const val = lookupByPct(fdTable, pct);
-      if (val === null) {
-        await interaction.reply(`No data for **${pct}%**.`);
-        return;
-      }
-
-      await interaction.reply(`**${pct}%** → lowest number seen **${val}**`);
+      const raw = Math.ceil(fdForPercent(pct, level));
+      await interaction.reply(`**${pct}%** FD at Lv${level} needs **${raw}** raw FD (60% at ${cap}).`);
       return;
     }
 
-    const value = parseInt(input, 10);
-    if (isNaN(value) || value < 1000 || value > 9999) {
-      await interaction.reply('Please provide a 4-digit number or a percentage (e.g. `1359` or `40%`).');
+    const value = parseInt(input.replace(/,/g, ''), 10);
+    if (isNaN(value) || value < 0) {
+      await interaction.reply('Please provide a raw FD number or a percentage (e.g. `3762` or `45%`).');
       return;
     }
 
-    const pct = lookupFd(fdTable, value);
-    if (pct === null) {
-      const min = fdTable[0];
-      await interaction.reply(`**${value}** is below the minimum threshold (${min.fd} = ${min.pct}%).`);
-      return;
-    }
-
-    await interaction.reply(`**${value}** → **${pct}%** FD`);
+    const pct = fdToPercent(value, level);
+    await interaction.reply(`**${value}** raw FD at Lv${level} → **${pct.toFixed(1)}%** FD (60% at ${cap}).`);
   },
 };
