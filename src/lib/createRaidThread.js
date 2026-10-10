@@ -60,6 +60,7 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
         player_name,
         slot_position,
         player_id,
+        uses_ticket,
         pilot_name
       )
     `)
@@ -134,6 +135,7 @@ async function createRaidThread({ channel, lineupId, lineupName }) {
           ? `${emojiPrefix}**${charName}** — <@${discordId}>`
           : `${emojiPrefix}**${charName}**`;
         if (lp.pilot_name) display += ` (pilot: ${lp.pilot_name})`;
+        if (lp.uses_ticket) display += ' 🎟️';
         slots[idx] = display;
       }
     });

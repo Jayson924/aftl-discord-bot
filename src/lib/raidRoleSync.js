@@ -18,6 +18,7 @@ const PLAYER_SELECT_COLUMNS = [
   'name',
   'discord_id',
   'exclude',
+  'tickets_used',
   ...ALL_COMPLETION_COLUMNS,
 ].join(', ');
 

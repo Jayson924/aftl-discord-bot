@@ -69,7 +69,7 @@ module.exports = {
         console.error('[raid-tag-completed] failed to send confirmation:', err);
       });
 
-      console.log(`[raid-tag-completed] cleared lineup ${lineup.id} (${lineup.name}); players=${result.playersUpdated}`);
+      console.log(`[raid-tag-completed] cleared lineup ${lineup.id} (${lineup.name}); players=${result.playersUpdated} tickets=${result.ticketsUpdated}`);
     } catch (err) {
       console.error('[raid-tag-completed] unexpected error:', err);
     } finally {

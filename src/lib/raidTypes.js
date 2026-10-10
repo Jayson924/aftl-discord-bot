@@ -41,6 +41,11 @@ function getRaidColor(raidType) {
   }
 }
 
+// Every "<X> Classic" raid allows one extra Pania ticket clear per week.
+function usesTickets(raidType) {
+  return / Classic$/.test(raidType || '');
+}
+
 // Forum tag name per raid type. Used only as a fallback when no tag ID env var
 // is configured. The actual tags have emoji in their display, so prefer the ID
 // map below — name matching is fragile if the emoji ends up in the name text.
@@ -99,7 +104,10 @@ function resolveRaidTag(raidType, availableTags = []) {
 function isCharacterEligible(character, raidType) {
   const column = getCompletionColumn(raidType);
   // 4-man / Unspecified — no completion model wired in, treat as eligible.
-  return column ? !character[column] : true;
+  if (!column) return true;
+  // Classic raids: 1 base clear + 1 ticket clear per week.
+  if (usesTickets(raidType) && !character.tickets_used?.[raidType]) return true;
+  return !character[column];
 }
 
 // Slash command choice list. Order matches the web app's selectors.
@@ -122,4 +130,5 @@ module.exports = {
   resolveRaidTag,
   isCharacterEligible,
   isFourManRaid,
+  usesTickets,
 };

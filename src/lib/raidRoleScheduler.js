@@ -17,6 +17,7 @@ const DEBOUNCE_MS = 2000;
 // this set (e.g. equipment, notes) doesn't move the needle.
 const PLAYER_TRIGGER_COLUMNS = new Set([
   ...ALL_COMPLETION_COLUMNS,
+  'tickets_used',
   'exclude',
   'discord_id',
 ]);
