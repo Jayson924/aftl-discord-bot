@@ -519,7 +519,8 @@ async function evaluateAndAct(interaction, lineup, character, usesTicket) {
   const gates = [];
   const displayReasons = [];
 
-  if (!appUser || (appUser.role !== 'guildmate' && appUser.role !== 'admin')) {
+  // Friends (part-time raiders) sign up like guild members; only guests need approval.
+  if (!appUser || !['friend', 'guildmate', 'editor', 'admin'].includes(appUser.role)) {
     gates.push('non-guildmate');
     displayReasons.push('not a guildmate');
   }

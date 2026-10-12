@@ -1,13 +1,4 @@
-// New-user review notifier.
-//
-// When a new `app_users` row is inserted (someone logs into the web app via
-// Discord for the first time, created with role 'guest'), the bot posts a
-// notification to a review channel with two buttons:
-//   - "Give Guildmate Role" → sets their web app role (app_users.role) to
-//     guildmate. (Web app role only — no Discord role is touched.)
-//   - "Ignore" → just removes the buttons so the notification is acknowledged.
-//
-// Both actions are gated to web-app admins, matching the sign-up approval flow.
+// Posts new web app users to a review channel with admin-only "Give Guildmate Role" / "Ignore" buttons.
 
 const {
   ActionRowBuilder,
@@ -17,6 +8,7 @@ const {
 } = require('discord.js');
 const supabase = require('../supabase');
 const { onAppUsersChange, startAppUsersChanges } = require('./appUsersChanges');
+const { siteRoleFor } = require('./siteRoleSync');
 
 // Channel the review notifications go to. Override with NEW_USER_CHANNEL_ID.
 const DEFAULT_CHANNEL_ID = '1513384145978523678';
@@ -94,10 +86,18 @@ function handleAppUsersChange(client, payload) {
   console.log(`[new-user] INSERT received — discord_id=${row.discord_id} role=${row.role}`);
   if (!row.discord_id) return;
   // New users are created as 'guest'; skip anyone already promoted.
-  if (row.role === 'guildmate' || row.role === 'admin') return;
-  sendNewUserNotification(client, row).catch(err =>
+  if (row.role && row.role !== 'guest') return;
+  notifyUnlessSynced(client, row).catch(err =>
     console.error('[new-user] notify failed:', err)
   );
+}
+
+// Skip people whose Discord roles already give them a site role.
+async function notifyUnlessSynced(client, row) {
+  const guild = (process.env.GUILD_ID && client.guilds.cache.get(process.env.GUILD_ID)) || client.guilds.cache.first();
+  const member = guild ? await guild.members.fetch(row.discord_id).catch(() => null) : null;
+  if (member && siteRoleFor(member) !== 'guest') return;
+  await sendNewUserNotification(client, row);
 }
 
 function startNewUserNotifier(client) {
@@ -156,7 +156,7 @@ async function handleApprove(interaction, targetDiscordId) {
     });
   }
 
-  // Update the web app role only (no Discord role is touched).
+  // siteRoleSync picks up the change and gives them Afterlight on Discord.
   const { error: roleErr } = await supabase
     .from('app_users')
     .update({ role: 'guildmate' })

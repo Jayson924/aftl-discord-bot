@@ -6,6 +6,7 @@ const { startThreadRequestHandler } = require('./lib/threadRequestHandler');
 const { startReminderScheduler } = require('./lib/reminderScheduler');
 const { startRaidRoleScheduler } = require('./lib/raidRoleScheduler');
 const { startNewUserNotifier, handleNewUserButton } = require('./lib/newUserNotifier');
+const { startSiteRoleSync } = require('./lib/siteRoleSync');
 const { startNewCharacterNotifier, handleNewCharacterButton } = require('./lib/newCharacterNotifier');
 const { startLootSync } = require('./lib/lootThread');
 const { startPayoutSync, startPayoutReconciler, startLootCloseSweeper } = require('./lib/lootPayout');
@@ -35,9 +36,8 @@ const client = new Client({
     // Owner DMs to the admin agent (events/admin-agent.js).
     GatewayIntentBits.DirectMessages,
   ],
-  // Reactions can land on messages the bot hasn't cached — receive them as
-  // partials so MessageReactionAdd/Remove still fire (hydrated in the handler).
-  partials: [Partials.Message, Partials.Reaction, Partials.Channel],
+  // Partials let reactions, role changes and leaves fire for uncached messages and members.
+  partials: [Partials.Message, Partials.Reaction, Partials.Channel, Partials.GuildMember],
 });
 
 // Load commands
@@ -74,6 +74,7 @@ client.once('ready', () => {
   startReminderScheduler(client);
   startRaidRoleScheduler(client);
   startNewUserNotifier(client);
+  startSiteRoleSync(client);
   startNewCharacterNotifier(client);
   startLootSync(client);
   startPayoutSync(client);
