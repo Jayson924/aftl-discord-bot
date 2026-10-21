@@ -7,6 +7,7 @@ const MIN_TEXT_LENGTH = 20;
 const MIN_IMAGES_WITHOUT_TEXT = 2;
 const LINK_PATTERN = /https?:\/\/|discord\.gg\/|discord(app)?\.com\/invite\//i;
 const BIO_BAIT_PATTERN = /check\s+(out\s+)?my\s+bio/i;
+const MASS_PING_PATTERN = /@(everyone|here)\b/i;
 
 // userId -> [{ fingerprint, channelId, at }]
 const recentPosts = new Map();
@@ -32,6 +33,9 @@ function imageCount(message) {
 
 function singleMessageSpamReason(message) {
   if (BIO_BAIT_PATTERN.test(message.content)) return 'posted "check my bio" bait';
+  if (MASS_PING_PATTERN.test(message.content) && LINK_PATTERN.test(message.content)) {
+    return 'posted a link with @everyone/@here';
+  }
   if (!message.content.trim() && imageCount(message) >= MIN_IMAGES_WITHOUT_TEXT) {
     return `posted ${imageCount(message)} images with no text`;
   }
