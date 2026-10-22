@@ -2,13 +2,12 @@
 //   - Supabase Realtime on `players` + `app_users` → react to any change that
 //     might shift a user's eligibility (clears via web app or bot, exclude
 //     toggles, owner changes, character add/delete).
-//   - Weekly Friday 5:05pm PT safety-net full reconcile in case Realtime
-//     dropped events around the weekly DB cleanup.
+//   - Weekly Friday 16:05 UTC safety-net full reconcile after the game reset and pg_cron cleanup.
 
 const { onPlayersChange, startPlayersChanges } = require('./playersChanges');
 const { onAppUsersChange, startAppUsersChanges } = require('./appUsersChanges');
 const { syncUserRaidRoles, syncAllUsers } = require('./raidRoleSync');
-const { ALL_COMPLETION_COLUMNS } = require('./raidTypes');
+const { ALL_COMPLETION_COLUMNS, WEEKLY_CLEARS_COLUMNS } = require('./raidTypes');
 
 const CRON_CHECK_INTERVAL_MS = 60 * 1000;
 const DEBOUNCE_MS = 2000;
@@ -17,6 +16,7 @@ const DEBOUNCE_MS = 2000;
 // this set (e.g. equipment, notes) doesn't move the needle.
 const PLAYER_TRIGGER_COLUMNS = new Set([
   ...ALL_COMPLETION_COLUMNS,
+  ...WEEKLY_CLEARS_COLUMNS,
   'tickets_used',
   'exclude',
   'discord_id',
@@ -29,6 +29,13 @@ function getPrimaryGuild(client) {
     if (g) return g;
   }
   return client.guilds.cache.first() || null;
+}
+
+// JSONB columns arrive as fresh objects on every event, so compare them by content.
+function sameValue(a, b) {
+  if (a === b) return true;
+  if (a && b && typeof a === 'object' && typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b);
+  return false;
 }
 
 // Coalesce burst updates for the same user (e.g. 8 players completing at
@@ -66,7 +73,7 @@ function handlePlayersChange(client, payload) {
   } else if (payload.eventType === 'UPDATE') {
     let triggered = false;
     for (const col of PLAYER_TRIGGER_COLUMNS) {
-      if (oldRow[col] !== newRow[col]) { triggered = true; break; }
+      if (!sameValue(oldRow[col], newRow[col])) { triggered = true; break; }
     }
     if (!triggered) return;
     // Owner change → both old and new owner need a re-evaluation.
@@ -93,33 +100,14 @@ function handleAppUsersChange(client, payload) {
   debouncedSync(guild, discordId);
 }
 
-// Friday 5:05pm PT — the GitHub Actions weekly cleanup runs at 5:00pm PT, so
-// this fires ~5 min later as a safety net. The Realtime sub above usually
-// catches the cleanup cascade on its own; this is just belt-and-suspenders.
+// Game reset and pg_cron cleanup run Friday 16:00 UTC; last week's game clears stop counting with no row change, so this re-grants roles.
 let lastRunDate = null;
-function getPTComponents(date = new Date()) {
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Los_Angeles',
-    weekday: 'short',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-    hour12: false,
-  });
-  const parts = Object.fromEntries(
-    fmt.formatToParts(date).map(p => [p.type, p.value])
-  );
-  return {
-    weekday: parts.weekday,
-    dateStr: `${parts.year}-${parts.month}-${parts.day}`,
-    hour: parseInt(parts.hour, 10),
-    minute: parseInt(parts.minute, 10),
-  };
-}
 
 async function checkWeeklyGrant(client) {
-  const { weekday, dateStr, hour, minute } = getPTComponents();
-  if (weekday !== 'Fri') return;
-  if (hour !== 17 || minute < 5) return;
+  const now = new Date();
+  if (now.getUTCDay() !== 5) return;
+  if (now.getUTCHours() !== 16 || now.getUTCMinutes() < 5) return;
+  const dateStr = now.toISOString().slice(0, 10);
   if (lastRunDate === dateStr) return;
 
   const guild = getPrimaryGuild(client);
@@ -137,7 +125,7 @@ async function checkWeeklyGrant(client) {
 }
 
 function startRaidRoleScheduler(client) {
-  console.log('[raid-role-scheduler] starting (Realtime + weekly Fri 5:05pm PT)');
+  console.log('[raid-role-scheduler] starting (Realtime + weekly Fri 16:05 UTC)');
   // Players + app_users changes come through shared hubs (one channel each for
   // the whole bot) so overlapping postgres_changes bindings can't collide.
   onPlayersChange((payload) => handlePlayersChange(client, payload));

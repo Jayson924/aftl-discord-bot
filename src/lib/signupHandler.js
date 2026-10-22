@@ -15,6 +15,7 @@ const { getFamilyOptions, getSpecOptions, getFinalClassOptions, CLASS_FAMILIES }
 const { getClassEmojiTag } = require('./classEmojis');
 const {
   ALL_COMPLETION_COLUMNS,
+  WEEKLY_CLEARS_COLUMNS,
   getLineupSize,
   isCharacterEligible,
   usesTickets,
@@ -48,7 +49,7 @@ async function getLineupWithPlayers(lineupId) {
 
 async function getCharactersOwnedBy(discordId) {
   const baseColumns = ['id', 'name', 'role', 'discord_id', 'account_number', 'exclude', 'exclude_label', 'tickets_used'];
-  const select = [...baseColumns, ...ALL_COMPLETION_COLUMNS].join(', ');
+  const select = [...baseColumns, ...ALL_COMPLETION_COLUMNS, ...WEEKLY_CLEARS_COLUMNS].join(', ');
   const { data, error } = await supabase
     .from('players')
     .select(select)

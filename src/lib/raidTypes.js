@@ -98,16 +98,50 @@ function resolveRaidTag(raidType, availableTags = []) {
   return null;
 }
 
-// Whether a character can still clear this raid this week.
-// Mirrors data.js#playerNeedsRaid on the web app. Pass a player row that
-// includes the relevant completion columns.
-function isCharacterEligible(character, raidType) {
+// Game map ids per raid type, mirroring GAME_RAIDS in the site's src/raid-clears.js.
+const GAME_RAID_STAGES = {
+  'BDN Classic': { stages: [14501] },
+  'DDN Hardcore': { stages: [17610] },
+  'DDN Classic': { stages: [14221] },
+  'DDN Normal': { stages: [14210, 14211, 14212, 14213], allStages: true },
+};
+
+// Columns that carry the game's synced weekly clears (see the site's add-weekly-clears*.sql).
+const WEEKLY_CLEARS_COLUMNS = ['weekly_clears', 'weekly_clears_at'];
+
+const SEA_OFFSET_MS = 8 * 3600e3;
+
+// The game's week turns at Saturday 00:00 SEA time (UTC+8), which is Friday 16:00 UTC.
+function gameWeekStart(now = new Date()) {
+  const sea = new Date(now.getTime() + SEA_OFFSET_MS);
+  const daysSinceSaturday = (sea.getUTCDay() + 1) % 7;
+  return new Date(Date.UTC(sea.getUTCFullYear(), sea.getUTCMonth(), sea.getUTCDate() - daysSinceSaturday) - SEA_OFFSET_MS);
+}
+
+function isThisGameWeek(timestamp, now = new Date()) {
+  if (!timestamp) return false;
+  const time = new Date(timestamp).getTime();
+  return Number.isFinite(time) && time >= gameWeekStart(now).getTime();
+}
+
+// Whether the game's synced counts from this week show the raid cleared.
+function isGameCleared(character, raidType, now = new Date()) {
+  const raid = GAME_RAID_STAGES[raidType];
+  const weeklyClears = character.weekly_clears;
+  if (!raid || !weeklyClears || !isThisGameWeek(character.weekly_clears_at, now)) return false;
+  const cleared = raid.stages.map((id) => (Number(weeklyClears[id]?.clears) || 0) > 0);
+  return raid.allStages ? cleared.every(Boolean) : cleared.some(Boolean);
+}
+
+// Whether a character can still clear this raid this week; mirrors the site's raidStatus plus the ticket clear.
+function isCharacterEligible(character, raidType, now = new Date()) {
   const column = getCompletionColumn(raidType);
   // 4-man / Unspecified — no completion model wired in, treat as eligible.
   if (!column) return true;
   // Classic raids: 1 base clear + 1 ticket clear per week.
   if (usesTickets(raidType) && !character.tickets_used?.[raidType]) return true;
-  return !character[column];
+  if (isGameCleared(character, raidType, now)) return false;
+  return !isThisGameWeek(character[column], now);
 }
 
 // Slash command choice list. Order matches the web app's selectors.
@@ -121,6 +155,10 @@ const RAID_TYPE_CHOICES = [
 
 module.exports = {
   ALL_COMPLETION_COLUMNS,
+  WEEKLY_CLEARS_COLUMNS,
+  gameWeekStart,
+  isGameCleared,
+  isThisGameWeek,
   RAID_TYPE_CHOICES,
   getCompletionColumn,
   getLineupSize,

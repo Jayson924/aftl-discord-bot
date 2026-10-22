@@ -3,7 +3,7 @@
 // Removes the role once they're out of eligible characters.
 
 const supabase = require('../supabase');
-const { isCharacterEligible, ALL_COMPLETION_COLUMNS } = require('./raidTypes');
+const { isCharacterEligible, ALL_COMPLETION_COLUMNS, WEEKLY_CLEARS_COLUMNS } = require('./raidTypes');
 
 // raid_type → env var holding the Discord role ID. Missing env var = the
 // feature is off for that raid type (no role assigned, no role removed).
@@ -20,6 +20,7 @@ const PLAYER_SELECT_COLUMNS = [
   'exclude',
   'tickets_used',
   ...ALL_COMPLETION_COLUMNS,
+  ...WEEKLY_CLEARS_COLUMNS,
 ].join(', ');
 
 function getConfiguredRoles() {
