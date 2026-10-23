@@ -2,17 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { gameWeekStart, isCharacterEligible } = require('../src/lib/raidTypes');
 
-// Thursday 2026-10-22 12:00 UTC; this game week began Friday 2026-10-16 16:00 UTC.
+// Thursday 2026-10-22 12:00 UTC; this game week began Saturday 2026-10-17 01:00 UTC.
 const NOW = new Date('2026-10-22T12:00:00Z');
 const THIS_WEEK = '2026-10-20T09:00:00Z';
-const LAST_WEEK = '2026-10-16T15:59:00Z';
+const LAST_WEEK = '2026-10-17T00:59:00Z';
 
 const stage = (clears) => ({ name: 'stage', clears, entries: clears, limit: 10 });
 
-test('game week starts Friday 16:00 UTC', () => {
-  assert.equal(gameWeekStart(NOW).toISOString(), '2026-10-16T16:00:00.000Z');
-  assert.equal(gameWeekStart(new Date('2026-10-23T15:59:59Z')).toISOString(), '2026-10-16T16:00:00.000Z');
-  assert.equal(gameWeekStart(new Date('2026-10-23T16:00:00Z')).toISOString(), '2026-10-23T16:00:00.000Z');
+test('game week starts Saturday 01:00 UTC (09:00 GMT+8)', () => {
+  assert.equal(gameWeekStart(NOW).toISOString(), '2026-10-17T01:00:00.000Z');
+  assert.equal(gameWeekStart(new Date('2026-10-24T00:59:59Z')).toISOString(), '2026-10-17T01:00:00.000Z');
+  assert.equal(gameWeekStart(new Date('2026-10-24T01:00:00Z')).toISOString(), '2026-10-24T01:00:00.000Z');
 });
 
 test('no clears at all is eligible', () => {

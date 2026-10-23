@@ -110,12 +110,13 @@ const GAME_RAID_STAGES = {
 const WEEKLY_CLEARS_COLUMNS = ['weekly_clears', 'weekly_clears_at'];
 
 const SEA_OFFSET_MS = 8 * 3600e3;
+const RESET_HOUR_MS = 9 * 3600e3;
 
-// The game's week turns at Saturday 00:00 SEA time (UTC+8), which is Friday 16:00 UTC.
+// The game's week turns at Saturday 09:00 SEA time (UTC+8), which is Saturday 01:00 UTC.
 function gameWeekStart(now = new Date()) {
-  const sea = new Date(now.getTime() + SEA_OFFSET_MS);
+  const sea = new Date(now.getTime() + SEA_OFFSET_MS - RESET_HOUR_MS);
   const daysSinceSaturday = (sea.getUTCDay() + 1) % 7;
-  return new Date(Date.UTC(sea.getUTCFullYear(), sea.getUTCMonth(), sea.getUTCDate() - daysSinceSaturday) - SEA_OFFSET_MS);
+  return new Date(Date.UTC(sea.getUTCFullYear(), sea.getUTCMonth(), sea.getUTCDate() - daysSinceSaturday) - SEA_OFFSET_MS + RESET_HOUR_MS);
 }
 
 function isThisGameWeek(timestamp, now = new Date()) {

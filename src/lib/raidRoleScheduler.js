@@ -2,7 +2,7 @@
 //   - Supabase Realtime on `players` + `app_users` → react to any change that
 //     might shift a user's eligibility (clears via web app or bot, exclude
 //     toggles, owner changes, character add/delete).
-//   - Weekly Friday 16:05 UTC safety-net full reconcile after the game reset and pg_cron cleanup.
+//   - Weekly Saturday 01:05 UTC safety-net full reconcile after the game reset and pg_cron cleanup.
 
 const { onPlayersChange, startPlayersChanges } = require('./playersChanges');
 const { onAppUsersChange, startAppUsersChanges } = require('./appUsersChanges');
@@ -100,13 +100,13 @@ function handleAppUsersChange(client, payload) {
   debouncedSync(guild, discordId);
 }
 
-// Game reset and pg_cron cleanup run Friday 16:00 UTC; last week's game clears stop counting with no row change, so this re-grants roles.
+// Game reset and pg_cron cleanup run Saturday 01:00 UTC; last week's game clears stop counting with no row change, so this re-grants roles.
 let lastRunDate = null;
 
 async function checkWeeklyGrant(client) {
   const now = new Date();
-  if (now.getUTCDay() !== 5) return;
-  if (now.getUTCHours() !== 16 || now.getUTCMinutes() < 5) return;
+  if (now.getUTCDay() !== 6) return;
+  if (now.getUTCHours() !== 1 || now.getUTCMinutes() < 5) return;
   const dateStr = now.toISOString().slice(0, 10);
   if (lastRunDate === dateStr) return;
 
@@ -125,7 +125,7 @@ async function checkWeeklyGrant(client) {
 }
 
 function startRaidRoleScheduler(client) {
-  console.log('[raid-role-scheduler] starting (Realtime + weekly Fri 16:05 UTC)');
+  console.log('[raid-role-scheduler] starting (Realtime + weekly Sat 01:05 UTC)');
   // Players + app_users changes come through shared hubs (one channel each for
   // the whole bot) so overlapping postgres_changes bindings can't collide.
   onPlayersChange((payload) => handlePlayersChange(client, payload));
