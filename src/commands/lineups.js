@@ -55,6 +55,10 @@ module.exports = {
           const idx = lp.slot_position - 1;
           if (idx >= 0 && idx < lineupSize) {
             let display = lp.player_name || '_empty_';
+            if (display.startsWith('[PUB]')) {
+              const [name, role] = display.slice(5).split('|');
+              display = `${name || role || 'Guest'} (guest)`;
+            }
             if (lp.pilot_name) display += ` (pilot: ${lp.pilot_name})`;
             if (lp.uses_ticket) display += ' 🎟️';
             players[idx] = display;

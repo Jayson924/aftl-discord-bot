@@ -91,7 +91,9 @@ async function getPilotMentions(lineupPlayers, nameToInfo) {
     if (ownerInfo && ownerInfo.discordId === pilotId) continue;
 
     if (!idToChars.has(pilotId)) idToChars.set(pilotId, []);
-    idToChars.get(pilotId).push({ name: lp.player_name, role: ownerInfo?.role || null });
+    idToChars.get(pilotId).push(lp.player_name.startsWith('[PUB]')
+      ? guestCharacter(lp.player_name)
+      : { name: lp.player_name, role: ownerInfo?.role || null });
   }
 
   return [...idToChars.entries()].map(([discordId, characters]) => ({
@@ -100,6 +102,12 @@ async function getPilotMentions(lineupPlayers, nameToInfo) {
     characters,
     isPilot: true,
   }));
+}
+
+// Guests are stored as "[PUB]Name|Class"; an unnamed guest shows its class.
+function guestCharacter(rawName) {
+  const [name, role] = rawName.slice(5).split('|');
+  return { name: name || role || 'Guest', role: role || null };
 }
 
 /**
