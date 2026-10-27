@@ -172,8 +172,21 @@ function buildPayoutContent(rosterDisplay, paidMap, total, payoutEach, closeAt, 
 
 // `ref` is a { lineupId } / { recordId } ref, a parent object, or a legacy lineup
 // id. Re-resolves a fresh parent so bookkeeping is current.
-async function refreshPayoutState(client, ref, { canPost = false, force = false } = {}) {
-  const parent = await resolveParentById(toRef(ref));
+// Per-parent queue: concurrent create-capable calls would each see no message and both post.
+const refreshQueues = new Map();
+
+function refreshPayoutState(client, ref, opts) {
+  const r = toRef(ref);
+  const key = r.recordId ? `record:${r.recordId}` : `lineup:${r.lineupId}`;
+  const prev = refreshQueues.get(key) || Promise.resolve();
+  const run = prev.catch(() => {}).then(() => refreshPayoutStateNow(client, r, opts));
+  refreshQueues.set(key, run);
+  run.finally(() => { if (refreshQueues.get(key) === run) refreshQueues.delete(key); }).catch(() => {});
+  return run;
+}
+
+async function refreshPayoutStateNow(client, ref, { canPost = false, force = false } = {}) {
+  const parent = await resolveParentById(ref);
   if (!parent) return { status: 'not-found' };
   if (!parent.lootThreadId) return { status: 'no-thread' };
 
